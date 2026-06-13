@@ -3,4 +3,4 @@ This repository brings together theory, algorithms, and simulations focused on s
 
 Currently, the focus is on 1D and 2D problems, ranging from the mathematical formulation of direct and inverse problems to the implementation of algorithms for reconstructing medium parameters. The goal is to build an organized collection of code, references, and materials that can serve both for study and for future applications.
 
-One of the main references used in the development of this project is the book Inverse Problems in Scattering: An Introduction, by G. M. L. Gladwell, which presents the mathematical foundations of inverse problems and provides the theoretical basis for several techniques discussed in this repository.
+The development of this project is being carried out under the guidance of IMPA professor and researcher, Pavel Petrov. The implementations and studies presented are mainly based on the book "Inverse Problems in Scattering: An Introduction" by G. M. L. Gladwell, used as one of the main theoretical bases for the topics covered in this repository.
