@@ -12,7 +12,7 @@ rho_real = ones(1, ni) * 1000;
 c_real   = ones(1, ni) * 1500;
 
 rho_real(31:60) = 2000;  c_real(31:60) = 3000;
-rho_real(61:end) = 1500;  c_real(61:end) = 2000;
+rho_real(61:end) = 1500;  c_real(61:end) = 2500;
 
 Z_normal_real = rho_real .* c_real; %impedancia real para comparação
 
