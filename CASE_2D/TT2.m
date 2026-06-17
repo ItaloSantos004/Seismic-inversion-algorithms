@@ -19,7 +19,7 @@ U = zeros(Nx, Nz, tempo + m);
 t0 = 0.1;
 s0 = 0.02;
 x0 = round(Nx/2);
-z0 = 50;
+z0 = 2;
 
 %ponto para comparação
 xr = 100;
@@ -29,7 +29,7 @@ zr = 100;
 dist1 = sqrt(((xr - x0) * h)^2 + ((zr - z0) * h)^2);
 
 %fonte fantasma
-zf = -50;
+zf = 0;
 dist2 = sqrt(((xr - x0) * h)^2 + ((zr - zf) * h)^2); %distancia
 
 orig = zeros(1, tempo);

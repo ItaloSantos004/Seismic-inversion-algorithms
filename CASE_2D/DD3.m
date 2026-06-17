@@ -19,7 +19,7 @@ U = zeros(Nx, Nz, tempo + m);
 t0 = 0.1;
 s = 0.02;
 x0 = round(Nx/2);
-z0 = 50;
+z0 = 2;
 
 %criando o termo elevado a M
 c1 = (S - 1) / (S + 1);
@@ -32,7 +32,7 @@ if M > 0
     end
 end
 
-figure('Position', [100, 100, 800, 600]);
+figure;
 
 
 for n = 1:tempo

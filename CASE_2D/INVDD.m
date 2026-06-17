@@ -12,7 +12,7 @@ omega0 = 2*pi*50; % Frequência angular central assumida (50 Hz)
 
 % Em vez de apenas Z, agora o meio real tem Densidade (rho) e Velocidade (c)
 rho_real = ones(1, ni) * 1000;
-c_real   = ones(1, ni) * 1500;
+c_real   = ones(1, ni) * 1700;
 
 % Simulando suas interfaces, mas agora com rho e c separados
 rho_real(31:60) = 2000;  c_real(31:60) = 3000;
