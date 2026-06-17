@@ -44,7 +44,7 @@ for j = 2:nt
 end
 
 
-%salvando as matrizes
+%{salvando as matrizes
 fprintf('Salvando as matrizes');
 
 save('matriz_P.txt', 'P');
@@ -55,6 +55,8 @@ fprintf('Matrizes salvas');
 
 %visualização de P e W
 intf = find(diff(Z) ~= 0);
+
+%}
 
 figure;
 
