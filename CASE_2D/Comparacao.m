@@ -36,13 +36,13 @@ orig = zeros(1, tempo);
 conv  = zeros(1, tempo);
 
 %matrizes
-c1 = (S - 1) / (S + 1);
-c2 = [1, -c1; c1, -1];
-c3 = 1;
+S1 = (S - 1) / (S + 1);
+S2 = [1, -S1; S1, -1];
+S3 = 1;
 
 if M > 0
     for i = 1:M
-        c3 = conv2(c3, c2);
+        S3 = conv2(S3, S2);
     end
 end
 
@@ -55,8 +55,8 @@ for n = 1:tempo
 
     %interior
     U(2:Nx-1, 2:Nz-1, p+1) = 2*U(2:Nx-1, 2:Nz-1, p) - U(2:Nx-1, 2:Nz-1, p-1) + ...
-        (S^2) * (U(3:Nx, 2:Nz-1, p) - 2*U(2:Nx-1, 2:Nz-1, p) + U(1:Nx-2, 2:Nz-1, p) + ...
-                 U(2:Nx-1, 3:Nz, p) - 2*U(2:Nx-1, 2:Nz-1, p) + U(2:Nx-1, 1:Nz-2, p));
+    (S^2) * (U(3:Nx, 2:Nz-1, p) - 2*U(2:Nx-1, 2:Nz-1, p) + U(1:Nx-2, 2:Nz-1, p) + ...
+    U(2:Nx-1, 3:Nz, p) - 2*U(2:Nx-1, 2:Nz-1, p) + U(2:Nx-1, 1:Nz-2, p));
 
     %fonte
     f = exp(-((t - t0) / s0)^2);
@@ -73,7 +73,7 @@ for n = 1:tempo
         for i = 1:M+1
             for j = 1:M+1
                 if i==1 && j==1; continue; end
-                coef = c3(i,j);
+                coef = S3(i,j);
                 tn = p - i + 2;
 
                 U(1, :, p+1)  = U(1, :, p+1)  - coef * U(j, :, tn);
