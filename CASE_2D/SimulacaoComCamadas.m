@@ -59,8 +59,8 @@ end
 
 %convolução
 if M > 0
-    for idx = 1:M
-        cost = cosd(angulos(idx));
+    for i = 1:M
+        cost = cosd(angulos(i));
 
         %camadas
         for j = 1:Ncam
