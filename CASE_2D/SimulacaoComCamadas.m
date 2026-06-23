@@ -11,7 +11,7 @@ Nx = 150;
 Nz = 250;
 h = 8.5;
 dt = 0.002;
-tempo = 100;
+tempo = 800;
 
 Ncam = length(c); %numero de camadas
 
@@ -102,16 +102,16 @@ for n = 1:tempo %preenchendo toda a matriz
 
     %interfaces
     for j = 1:Ncam-1
-        zi = int(j);
-        uint = U(x, zi, p);
+        Zcam = int(j);
+        uint = U(x, Zcam, p);
 
-        numz = ( U(x, zi+1, p) - uint ) ./ (d(j+1)*h) - ( uint - U(x, zi-1, p) ) ./ (d(j)*h);
+        numz = ( U(x, Zcam+1, p) - uint ) ./ (d(j+1)*h) - ( uint - U(x, Zcam-1, p) ) ./ (d(j)*h);
 
-        u_xx = ( U(x+1, zi, p) - 2*uint + U(x-1, zi, p) ) ./ (h^2);
+        u_xx = ( U(x+1, Zcam, p) - 2*uint + U(x-1, Zcam, p) ) ./ (h^2);
         numx = coefx(j) .* u_xx;
 
         u_tt = (numz + numx) ./ dint(j);
-        U(x, zi, p+1) = 2*uint - U(x, zi, p-1) + (dt^2 .* u_tt);
+        U(x, Zcam, p+1) = 2*uint - U(x, Zcam, p-1) + (dt^2 .* u_tt);
     end
 
     %fonte
@@ -145,10 +145,10 @@ for n = 1:tempo %preenchendo toda a matriz
 
                 %laterias interface
                 for j = 1:Ncam-1
-                    zi = int(j);
+                    Zcam = int(j);
                     coefl = convint{j}(ii, jj);
-                    U(1,  zi, p+1) = U(1,  zi, p+1) - coefl * U(jj, zi, tn);
-                    U(Nx, zi, p+1) = U(Nx, zi, p+1) - coefl * U(Nx - jj + 1, zi, tn);
+                    U(1,  Zcam, p+1) = U(1,  Zcam, p+1) - coefl * U(jj, Zcam, tn);
+                    U(Nx, Zcam, p+1) = U(Nx, Zcam, p+1) - coefl * U(Nx - jj + 1, Zcam, tn);
                 end
             end
         end

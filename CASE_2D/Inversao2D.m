@@ -121,11 +121,8 @@ for i = 1:ni
 
     p = polyfit(x, y, 1); %ajuste da reta
 
-    B = min(p(1), -1e-20); %para manter a inclinação sempre negativa
-    A = max(p(2),  1e-20); %para manter a interseção sempre positiva
-
-    prec(i) = sqrt( -1 / (B * w^2) ); %recuperando os parametros
-    crec(i)   = sqrt(  1 / (A * prec(i)^2) );
+    prec(i) = sqrt( -1 / (p(1) * w^2) ); %recuperando os parametros
+    crec(i)   = sqrt(  1 / (p(2) * prec(i)^2) );
 end
 
 Zrec2 = prec .* crec; %impedancia recuperada
