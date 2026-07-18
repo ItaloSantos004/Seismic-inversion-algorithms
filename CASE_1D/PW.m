@@ -3,11 +3,46 @@ clear; clc; close all;
 nt = 1600; %tempo
 ni = 400;  %profundidade
 
-%impedancia
-Z = ones(1, ni);
-Z(1:120)   = 1500 * 1000;
-Z(121:250) = 2500 * 1800;
-Z(251:end) = 4000 * 2500;
+%propriedades do meio
+C = ones(1, ni);
+Rho = ones(1, ni);
+
+C(1:120)   = 1500; Rho(1:120)   = 1000;
+C(121:250) = 2500; Rho(121:250) = 1800;
+C(251:end) = 4000; Rho(251:end) = 2500;
+
+%Impedância
+Z = C .* Rho; 
+
+%Visualização
+figure;
+
+%perfil de velocidade
+subplot(1, 3, 1);
+plot(1:ni, C, 'b', 'LineWidth', 2);
+title('Velocidade (c)');
+xlabel('Profundidade (Xi)');
+ylabel('Velocidade (m/s)');
+ylim([min(C)-500, max(C)+500]);
+grid on;
+
+%perfil de densidade
+subplot(1, 3, 2);
+plot(1:ni, Rho, 'r', 'LineWidth', 2);
+title('Densidade (\rho)');
+xlabel('Profundidade (Xi)');
+ylabel('Densidade (kg/m^3)');
+ylim([min(Rho)-500, max(Rho)+500]);
+grid on;
+
+%perfil de impedancia
+subplot(1, 3, 3);
+plot(1:ni, Z, 'k', 'LineWidth', 2);
+title('Impedância Acústica (Z)');
+xlabel('Profundidade (Xi)');
+ylabel('Impedância (kg/(m^2 \cdot s))');
+ylim([min(Z)-1e6, max(Z)+1e6]);
+grid on;
 
 P = zeros(ni, nt);
 W = zeros(ni, nt);
@@ -43,35 +78,24 @@ for j = 2:nt
     end
 end
 
-
-%{salvando as matrizes
-fprintf('Salvando as matrizes');
-
-save('matriz_P.txt', 'P');
-save('matriz_W.txt', 'W');
-
-fprintf('Matrizes salvas');
-
-
-%visualização de P e W
+%linha da interface
 intf = find(diff(Z) ~= 0);
 
-%}
-
+%visualização de P e W
 figure;
 
 for j = 1:5:nt
 
     %pressao
     subplot(2, 1, 1);
-    plot(1:ni, P(:, j), 'blue', 'LineWidth', 1.5);
+    plot(1:ni, P(:, j), 'b', 'LineWidth', 1.5);
     hold on;
     for k = 1:length(intf)
         line([intf(k) intf(k)], [-1200 1200], 'Color', 'red', 'LineStyle', '--');
     end
     hold off;
     axis([1 ni -1200 1200]);
-    title(['Propagação j =', num2str(j)]);
+    title(['Propagação j = ', num2str(j)]);
     ylabel('P');
     grid on;
 
@@ -90,5 +114,3 @@ for j = 1:5:nt
 
     drawnow;
 end
-
-

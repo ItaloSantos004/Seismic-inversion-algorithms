@@ -7,7 +7,7 @@ z0 = 0; %Inicio da fonte
 
 c = 1500 * ones(size(z)); %Velocidade da onda
 
-%Tempo(CFL)
+%Tempo
 dz = z(2) - z(1);
 dt = dz / (10 * max(c));
 t = 0:dt:0.5;
@@ -36,10 +36,6 @@ for n = 2:nt-1
     U(n+1, 1) = 0;
     U(n+1, nz) = 0;
 end
-
-%salvando tudo em txt
-%save('matriz_onda_diriclet.txt', 'U');
-%fprintf('\nMatriz completa salva no arquivo: matriz_onda_diriclet.txt\n');
 
 %Simulação
 figure;

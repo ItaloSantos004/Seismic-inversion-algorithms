@@ -6,7 +6,7 @@ nz = length(z);
 dz = z(2) - z(1);
 
 %Camadas
-interfaces_z = [100, 200 300, 400];
+interfaces_z = [100, 200, 300, 400];
 c_vals = [1500, 1700, 2500, 4000, 4500];
 p_vals = [1000, 1300, 1800, 2500, 3000];
 
@@ -17,6 +17,39 @@ for k = 1:length(interfaces_z) %preenchendo nossa grade
     C(z >= interfaces_z(k)) = c_vals(k+1);
     P(z >= interfaces_z(k)) = p_vals(k+1);
 end
+
+%Impedancia
+Z = P .* C;
+
+%visualização do meio
+figure;
+
+%perfil de velocidade
+subplot(1, 3, 1);
+plot(z, C, 'b', 'LineWidth', 2);
+title('Velocidade (c)');
+xlabel('Profundidade (m)');
+ylabel('Velocidade (m/s)');
+ylim([min(c_vals)-500, max(c_vals)+500]);
+grid on;
+
+%perfil de densidade
+subplot(1, 3, 2);
+plot(z, P, 'r', 'LineWidth', 2);
+title('Densidade (\rho)');
+xlabel('Profundidade (m)');
+ylabel('Densidade (kg/m^3)');
+ylim([min(p_vals)-500, max(p_vals)+500]);
+grid on;
+
+%perfil de impedancia
+subplot(1, 3, 3);
+plot(z, Z, 'k', 'LineWidth', 2);
+title('Impedância Acústica (Z = \rho \cdot c)');
+xlabel('Profundidade (m)');
+ylabel('Impedância (kg/(m^2 \cdot s))');
+ylim([min(Z)-1e6, max(Z)+1e6]);
+grid on;
 
 %Tempo
 dt = dz / (10 * max(C));
@@ -75,7 +108,7 @@ for n = 2:nt-1
 end
 
 %Visualização
-figure('Color', 'w');
+figure;
 for n = 1:80:nt
     plot(z, U(n, :), 'LineWidth', 1.5);
     hold on;

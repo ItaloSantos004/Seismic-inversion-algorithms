@@ -7,7 +7,7 @@ z0 = 0; %Inicio da fonte
 
 c = 1500 * ones(size(z)); %Velocidade da onda
 
-%Tempo(CFL)
+%Tempo
 dz = z(2) - z(1);
 dt = dz / (10 * max(c));
 t = 0:dt:0.5;
@@ -36,10 +36,6 @@ for n = 2:nt-1
 
     U(n+1, nz) = U(n, nz-1) + coef(nz) * (U(n+1, nz-1) - U(n, nz));
 end
-
-%Salvando a matriz em txt
-%save('matriz_onda_transferencia.txt', 'U');
-%fprintf('\nMatriz completa salva no arquivo: matriz_onda_tranferencia.txt\n');
 
 %Simulação
 figure;

@@ -30,6 +30,52 @@ for j = 1:Ncam-1 %atualizando os indices de cada camada
 end
 zcam{Ncam} = iz : Nz - 1;
 
+%propriedades do meio
+C_prof = zeros(Nz, 1);
+D_prof = zeros(Nz, 1);
+
+inicio = 1;
+for j = 1:Ncam-1
+    fim = int(j);
+    C_prof(inicio:fim) = c(j);
+    D_prof(inicio:fim) = d(j);
+    inicio = fim + 1;
+end
+C_prof(inicio:Nz) = c(end);
+D_prof(inicio:Nz) = d(end);
+
+%impedancia
+Z_prof = C_prof .* D_prof;
+
+figure;
+
+%velocidade
+subplot(1, 3, 1);
+plot(1:Nz, C_prof, 'b', 'LineWidth', 2);
+title('Velocidade (c)');
+xlabel('Profundidade (Z)');
+ylabel('Velocidade (m/s)');
+ylim([min(c)-500, max(c)+500]);
+grid on;
+
+%densidade
+subplot(1, 3, 2);
+plot(1:Nz, D_prof, 'r', 'LineWidth', 2);
+title('Densidade (d)');
+xlabel('Profundidade (Z)');
+ylabel('Densidade (kg/m^3)');
+ylim([min(d)-500, max(d)+500]);
+grid on;
+
+%impedância
+subplot(1, 3, 3);
+plot(1:Nz, Z_prof, 'k', 'LineWidth', 2);
+title('Impedância Acústica (Z)');
+xlabel('Profundidade (Z)');
+ylabel('Impedância (kg/(m^2 \cdot s))');
+ylim([min(Z_prof)-1e6, max(Z_prof)+1e6]);
+grid on;
+
 %constantes e contorno
 gamma = (c .* dt ./ h).^2; %interior
 

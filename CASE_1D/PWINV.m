@@ -149,12 +149,12 @@ end
 
 %visualização
 figure;
-plot(1:ni, Z, 'b', 'LineWidth', 2, 'DisplayName', 'Z original');
+plot(1:ni, Z, 'b', 'LineWidth', 3.5, 'DisplayName', 'Z original');
 hold on;
-plot(1:ni, Z4, 'r--', 'LineWidth', 2, 'DisplayName', 'Z reconstruido');
+plot(1:ni, Z4, 'r--', 'LineWidth', 3, 'DisplayName', 'Z reconstruido');
 
 hold off;
-axis([1 ni 0 1.2e7]);
+axis([1 ni 0 8e6]);
 xlabel('Xi');
 ylabel('Impedância');
 title('Inversão 1D');

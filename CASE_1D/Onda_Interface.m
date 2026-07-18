@@ -13,7 +13,7 @@ c2 = 3000; %meio 2
 c(z < zc) = c1;
 c(z >= zc) = c2;
 
-%Tempo(CFL)
+%Tempo
 dz = z(2) - z(1);
 dt = dz / (10 * max(c));
 t = 0:dt:0.4;
@@ -41,10 +41,6 @@ for n = 2:nt-1
 
     U(n+1, nz) = U(n, nz-1) + coef(nz) * (U(n+1, nz-1) - U(n, nz));
 end
-
-%Salvando tudo
-%save('matriz_onda_camadas.txt', 'U');
-%fprintf('\nMatriz completa salva no arquivo: matriz_onda_camadas.txt\n');
 
 %Simulação
 figure;
