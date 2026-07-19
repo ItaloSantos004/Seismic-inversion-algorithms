@@ -1,49 +1,50 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from numba import njit, prange
-import time
 from scipy.interpolate import interp1d
-import scipy.io as sio # Biblioteca necessária para ler arquivos .mat
+import scipy.io as sio #pra ler .mat
 
-# 1. Carregamento dos Dados de Entrada (Subamostrados para Inversão)
+#extraindo os dados para inversão
 dados = np.load('dados_marmousi_P_W.npz')
-P_cube = dados['P_cube']
-W_cube = dados['W_cube']
-Vp_real = dados['Vp_real'] # Matriz real no passo de 50m (usada no plot simples)
+P_real = dados['P_real']
+W_real = dados['W_real']
+Vel_idx = dados['Vp_real']
 
-Nx_sub, nx_win, nt = P_cube.shape
-ni = 2800                  # Profundidade em amostras
-nt2 = nt                   # Será 1600 automaticamente
-dx_inv = 50.0              # Passo da inversão
-w_freq = 2 * np.pi * 50
-xi = (2 * np.pi / (nx_win * dx_inv)) * np.arange(-(nx_win//2), (nx_win//2) + 1, dtype=np.float32)
+#parametros
+Nx_idx, n_sens, nt = P_real.shape
+ni = 2800                  
+nt2 = nt 
+dx = 50.0
+w0 = 2 * np.pi * 50
+xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1, dtype=np.float32)
 
-print(f"-> Iniciando inversão Layer-Peeling de {Nx_sub} colunas...")
+print("Inicio - fazendo transformada de fourier")
 
-# 2. Transformada de Fourier Espacial (Regresso ao domínio dos ângulos)
-P_canal = np.zeros_like(P_cube, dtype=np.float32)
-W_canal = np.zeros_like(W_cube, dtype=np.float32)
+#fazendo trasnformada para voltar pro dominio dos angulos
+P_canal = np.zeros_like(P_real, dtype=np.float32)
+W_canal = np.zeros_like(W_real, dtype=np.float32)
 
-for col in range(Nx_sub):
+for col in range(Nx_idx):
     for j in range(nt):
-        P_canal[col, :, j] = np.real(np.fft.fftshift(np.fft.fft(P_cube[col, :, j])))
-        W_canal[col, :, j] = np.real(np.fft.fftshift(np.fft.fft(W_cube[col, :, j])))
+        P_canal[col, :, j] = np.real(np.fft.fftshift(np.fft.fft(P_real[col, :, j])))
+        W_canal[col, :, j] = np.real(np.fft.fftshift(np.fft.fft(W_real[col, :, j])))
 
-# 3. Motor Numba: Descida Recursiva Layer-Peeling
+print("Inversão")
+#iniciando loop inversão
 @njit(parallel=True, fastmath=True)
-def inversao_layer_peeling(P_canal, W_canal, xi, w_freq, ni, nt2, Nx_sub, nx_win):
-    Vel_rec = np.zeros((ni, Nx_sub), dtype=np.float32)
-    xi_sq = xi**2
+def inversao(P_canal, W_canal, xi, w0, ni, nt2, Nx_idx, n_sens):
+    Vel_rec = np.zeros((ni, Nx_idx), dtype=np.float32)
+    xi2 = xi**2
     
-    for col in prange(Nx_sub):
-        Zrec = np.zeros((nx_win, ni), dtype=np.float32)
+    for col in prange(Nx_idx):
+        Zrec = np.zeros((n_sens, ni), dtype=np.float32)
         
-        for m in range(nx_win):
+        for m in range(n_sens):
             Pinv = np.zeros((ni, nt2), dtype=np.float32)
             Winv = np.zeros((ni, nt2), dtype=np.float32)
             Zinv = np.zeros(ni, dtype=np.float32)
             
-            # Condição de Superfície
+            #superficie
             for j in range(0, nt2, 2):
                 if j + 2 < nt2:
                     Pinv[0, j] = P_canal[col, m, j + 2]
@@ -54,7 +55,7 @@ def inversao_layer_peeling(P_canal, W_canal, xi, w_freq, ni, nt2, Nx_sub, nx_win
             else:
                 Zinv[0] = 1.0
                 
-            # Continuação Descendente
+            #recursao
             for i in range(1, ni):
                 for j in range(i, nt2 - i, 2):
                     a = Winv[i-1, j-1] + Winv[i-1, j+1]
@@ -74,26 +75,27 @@ def inversao_layer_peeling(P_canal, W_canal, xi, w_freq, ni, nt2, Nx_sub, nx_win
             for i in range(ni):
                 Zrec[m, i] = Zinv[i]
                 
-        # 4. Regressão Linear para isolar Velocidade
+        #separando a velocidade
         for i in range(ni):
-            y = np.zeros(nx_win, dtype=np.float32)
-            for m in range(nx_win):
+            y = np.zeros(n_sens, dtype=np.float32)
+            for m in range(n_sens):
                 if Zrec[m, i] != 0:
                     y[m] = 1.0 / (Zrec[m, i]**2)
                     
-            n_pts = nx_win
-            sum_x = np.sum(xi_sq)
+            n_pts = n_sens
+            sum_x = np.sum(xi2)
             sum_y = np.sum(y)
-            sum_x2 = np.sum(xi_sq**2)
-            sum_xy = np.sum(xi_sq * y)
+            sum_x2 = np.sum(xi2**2)
+            sum_xy = np.sum(xi2 * y)
             denom = (n_pts * sum_x2 - sum_x**2)
             
             if denom != 0:
                 p1 = (n_pts * sum_xy - sum_x * sum_y) / denom
                 p2 = (sum_y * sum_x2 - sum_x * sum_xy) / denom
                 
-                if p1 != 0 and (-1.0 / (p1 * w_freq**2)) > 0:
-                    prec = np.sqrt(-1.0 / (p1 * w_freq**2))
+                #recuperando velocidade com densidade constante
+                if p1 != 0 and (-1.0 / (p1 * w0**2)) > 0:
+                    prec = np.sqrt(-1.0 / (p1 * w0**2))
                     if p2 != 0 and (1.0 / (p2 * prec**2)) > 0:
                         Vel_rec[i, col] = np.sqrt(1.0 / (p2 * prec**2))
                     else:
@@ -105,82 +107,68 @@ def inversao_layer_peeling(P_canal, W_canal, xi, w_freq, ni, nt2, Nx_sub, nx_win
 
     return Vel_rec
 
-inicio = time.time()
-Velocidade_Reconstruida = inversao_layer_peeling(P_canal, W_canal, xi, w_freq, ni, nt2, Nx_sub, nx_win)
-print(f"-> Inversão concluída com sucesso em {time.time() - inicio:.2f} segundos!")
 
-# ==============================================================================
-# 5. MÓDULO DE INTERPOLAÇÃO E ANÁLISE DE ERRO (Lendo do .mat)
-# ==============================================================================
-print("-> Carregando matriz original do Marmousi (marmousi_matrizes.mat)...")
+vel_inversao = inversao(P_canal, W_canal, xi, w0, ni, nt2, Nx_idx, n_sens)
+print("Inversão Concluida")
+
+#fazendo interpolação e vendo o erro
+print("carregando dados originais")
 
 try:
-    # Lê o arquivo .mat exportado pelo seu script Octave
-    mat_data = sio.loadmat('marmousi_matrizes.mat')
+    dados_orig = sio.loadmat('marmousi_matrizes.mat')
     
-    # Extrai a variável 'Vp' e garante que é um array NumPy float32
-    v_true_high_res = np.array(mat_data['Vp'], dtype=np.float32)
+    v_true = np.array(dados_orig['Vp'], dtype=np.float32) #extraindo a velocidade
     
-    # -> ADICIONE ESTA LINHA PARA RESOLVER O ERRO <-
-    v_true_high_res = v_true_high_res[:ni, :]
+    v_true = v_true[:ni, :]
     
 except FileNotFoundError:
-    print("CRÍTICO: Arquivo 'marmousi_matrizes.mat' não encontrado no diretório.")
-    print("Certifique-se de rodar o script Octave antes para gerar o arquivo.")
+    print("Erro")
     exit()
 
 dx_true = 1.25
-nx_true = v_true_high_res.shape[1]
+nx_true = v_true.shape[1]
 
-print("-> Iniciando interpolação horizontal (dx = 50m para dx = 1.25m)...")
+print("Interpolação")
 
-# Vetores de posição espacial
-x_inv  = np.arange(Nx_sub) * dx_inv
+#posição
+x_inv  = np.arange(Nx_idx) * dx
 x_true = np.arange(nx_true) * dx_true
 
-# Pré-alocando a matriz interpolada
-v_inv_interp = np.zeros((ni, nx_true), dtype=np.float32)
+#inicializando matriz interpolada
+v_intp = np.zeros((ni, nx_true), dtype=np.float32)
 
-# Interpolação linha por linha
+#fazendo interpolação 
 for i in range(ni):
-    # kind='cubic' simula o comportamento de splines para manter suavidade
-    # fill_value='extrapolate' garante que as bordas não gerem erros (NaN)
-    interpolador = interp1d(x_inv, Velocidade_Reconstruida[i, :], kind='cubic', fill_value='extrapolate')
-    v_inv_interp[i, :] = interpolador(x_true)
+    interpolador = interp1d(x_inv, vel_inversao[i, :], kind='cubic', fill_value='extrapolate')
+    v_intp[i, :] = interpolador(x_true)
 
-print("-> Calculando matriz de erro relativo...")
-# Cálculo das Matrizes de Erro
-erro_absoluto = np.abs(v_inv_interp - v_true_high_res)
-erro_relativo = (erro_absoluto / v_true_high_res) * 100
+print("calculando a matriz de erro")
+erro_absoluto = np.abs(v_intp - v_true)
+erro_relativo = (erro_absoluto / v_true) * 100
 
-# ==============================================================================
-# 6. VISUALIZAÇÃO: ORIGINAL vs INTERPOLADO vs ERRO RELATIVO
-# ==============================================================================
-print("-> Gerando gráficos de comparação...")
+#visualização
 fig, axes = plt.subplots(3, 1, figsize=(14, 12))
 
-# Convertendo limites de metros para QUILÔMETROS
+#km
 x_min_km = x_true[0] / 1000
 x_max_km = x_true[-1] / 1000
-z_max_km = (ni * dx_true) / 1000 # 2800 * 1.25 / 1000 = 3.5 km
+z_max_km = (ni * dx_true) / 1000
 
-# A ordem do extent é: [esquerda, direita, inferior, superior]
-# Colocamos o z_max_km em 'inferior' e 0 em 'superior' para o eixo Y crescer para baixo
-extent_km = [x_min_km, x_max_km, z_max_km, 0]
+extent_km = [x_min_km, x_max_km, z_max_km, 0] #apenas invertendo
 
-# Plot 1: Modelo Original Alta Resolução
-im1 = axes[0].imshow(v_true_high_res, aspect='auto', cmap='jet', vmin=1500, vmax=4500, extent=extent_km)
+#modelo original
+im1 = axes[0].imshow(v_true, aspect='auto', cmap='jet', vmin=1500, vmax=4500, extent=extent_km)
 axes[0].set_title('Modelo Original Marmousi', fontweight='bold')
 axes[0].set_ylabel('Profundidade (km)')
 fig.colorbar(im1, ax=axes[0], label='Velocidade (m/s)')
 
-# Plot 2: Modelo Invertido Interpolado
-im2 = axes[1].imshow(v_inv_interp, aspect='auto', cmap='jet', vmin=1500, vmax=4500, extent=extent_km)
+#modelo interpolado
+im2 = axes[1].imshow(v_intp, aspect='auto', cmap='jet', vmin=1500, vmax=4500, extent=extent_km)
 axes[1].set_title('Inversão com Interpolação', fontweight='bold')
 axes[1].set_ylabel('Profundidade (km)')
 fig.colorbar(im2, ax=axes[1], label='Velocidade (m/s)')
 
-# Plot 3: Erro Relativo
+#erro relativo
 im3 = axes[2].imshow(erro_relativo, aspect='auto', cmap='hot', vmin=0, vmax=10, extent=extent_km)
 axes[2].set_title('Erro (%)', fontweight='bold')
 axes[2].set_xlabel('Distância X (km)')
@@ -188,5 +176,5 @@ axes[2].set_ylabel('Profundidade (km)')
 fig.colorbar(im3, ax=axes[2], label='Erro (%)')
 
 plt.tight_layout()
-plt.savefig('analise_erro_marmousi_km.png', dpi=300)
-print("-> Imagem da análise salva com sucesso!")
+plt.savefig('erro_marmousi.png', dpi=300)
+print("Imagem Salva")

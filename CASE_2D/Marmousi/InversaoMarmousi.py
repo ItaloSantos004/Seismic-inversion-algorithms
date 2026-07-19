@@ -1,46 +1,48 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from numba import njit, prange
-import time
 
+#extraindo os dados para inversão
 dados = np.load('dados_marmousi_P_W.npz')
-P_cube = dados['P_cube']
-W_cube = dados['W_cube']
-Vp_real = dados['Vp_real']
+P_real = dados['P_real']
+W_real = dados['W_real']
+Vel_idx = dados['Vp_real']
 
-Nx_sub, nx_win, nt = P_cube.shape
+#parametros
+Nx_idx, n_sens, nt = P_real.shape
 ni = 2800                  
-nt2 = nt                  # Será 1600 automaticamente
+nt2 = nt 
 dx = 50.0
-w_freq = 2 * np.pi * 50
-xi = (2 * np.pi / (nx_win * dx)) * np.arange(-(nx_win//2), (nx_win//2) + 1, dtype=np.float32)
+w0 = 2 * np.pi * 50
+xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1, dtype=np.float32)
 
-print(f"-> Iniciando inversão de {Nx_sub} colunas...")
+print("Inicio - fazendo transformada de fourier")
 
-# 2. Transformada de Fourier Espacial (Regresso ao domínio dos ângulos)
-P_canal = np.zeros_like(P_cube, dtype=np.float32)
-W_canal = np.zeros_like(W_cube, dtype=np.float32)
+#fazendo trasnformada para voltar pro dominio dos angulos
+P_canal = np.zeros_like(P_real, dtype=np.float32)
+W_canal = np.zeros_like(W_real, dtype=np.float32)
 
-for col in range(Nx_sub):
+for col in range(Nx_idx):
     for j in range(nt):
-        P_canal[col, :, j] = np.real(np.fft.fftshift(np.fft.fft(P_cube[col, :, j])))
-        W_canal[col, :, j] = np.real(np.fft.fftshift(np.fft.fft(W_cube[col, :, j])))
+        P_canal[col, :, j] = np.real(np.fft.fftshift(np.fft.fft(P_real[col, :, j])))
+        W_canal[col, :, j] = np.real(np.fft.fftshift(np.fft.fft(W_real[col, :, j])))
 
-# 3. Motor Numba: Descida Recursiva Layer-Peeling
+print("Inversão")
+#iniciando loop inversão
 @njit(parallel=True, fastmath=True)
-def inversao_layer_peeling(P_canal, W_canal, xi, w_freq, ni, nt2, Nx_sub, nx_win):
-    Vel_rec = np.zeros((ni, Nx_sub), dtype=np.float32)
-    xi_sq = xi**2
+def inversao(P_canal, W_canal, xi, w0, ni, nt2, Nx_idx, n_sens):
+    Vel_rec = np.zeros((ni, Nx_idx), dtype=np.float32)
+    xi2 = xi**2
     
-    for col in prange(Nx_sub):
-        Zrec = np.zeros((nx_win, ni), dtype=np.float32)
+    for col in prange(Nx_idx):
+        Zrec = np.zeros((n_sens, ni), dtype=np.float32)
         
-        for m in range(nx_win):
+        for m in range(n_sens):
             Pinv = np.zeros((ni, nt2), dtype=np.float32)
             Winv = np.zeros((ni, nt2), dtype=np.float32)
             Zinv = np.zeros(ni, dtype=np.float32)
             
-            # Condição de Superfície
+            #superficie
             for j in range(0, nt2, 2):
                 if j + 2 < nt2:
                     Pinv[0, j] = P_canal[col, m, j + 2]
@@ -51,7 +53,7 @@ def inversao_layer_peeling(P_canal, W_canal, xi, w_freq, ni, nt2, Nx_sub, nx_win
             else:
                 Zinv[0] = 1.0
                 
-            # Continuação Descendente (A Recursão)
+            #recursao
             for i in range(1, ni):
                 for j in range(i, nt2 - i, 2):
                     a = Winv[i-1, j-1] + Winv[i-1, j+1]
@@ -71,27 +73,27 @@ def inversao_layer_peeling(P_canal, W_canal, xi, w_freq, ni, nt2, Nx_sub, nx_win
             for i in range(ni):
                 Zrec[m, i] = Zinv[i]
                 
-        # 4. Regressão Linear para isolar Velocidade (Polyfit manual Numba)
+        #separando a velocidade
         for i in range(ni):
-            y = np.zeros(nx_win, dtype=np.float32)
-            for m in range(nx_win):
+            y = np.zeros(n_sens, dtype=np.float32)
+            for m in range(n_sens):
                 if Zrec[m, i] != 0:
                     y[m] = 1.0 / (Zrec[m, i]**2)
                     
-            n_pts = nx_win
-            sum_x = np.sum(xi_sq)
+            n_pts = n_sens
+            sum_x = np.sum(xi2)
             sum_y = np.sum(y)
-            sum_x2 = np.sum(xi_sq**2)
-            sum_xy = np.sum(xi_sq * y)
+            sum_x2 = np.sum(xi2**2)
+            sum_xy = np.sum(xi2 * y)
             denom = (n_pts * sum_x2 - sum_x**2)
             
             if denom != 0:
                 p1 = (n_pts * sum_xy - sum_x * sum_y) / denom
                 p2 = (sum_y * sum_x2 - sum_x * sum_xy) / denom
                 
-                # Recuperação da velocidade assumindo Densidade
-                if p1 != 0 and (-1.0 / (p1 * w_freq**2)) > 0:
-                    prec = np.sqrt(-1.0 / (p1 * w_freq**2))
+                #recuperando velocidade com densidade constante
+                if p1 != 0 and (-1.0 / (p1 * w0**2)) > 0:
+                    prec = np.sqrt(-1.0 / (p1 * w0**2))
                     if p2 != 0 and (1.0 / (p2 * prec**2)) > 0:
                         Vel_rec[i, col] = np.sqrt(1.0 / (p2 * prec**2))
                     else:
@@ -103,24 +105,24 @@ def inversao_layer_peeling(P_canal, W_canal, xi, w_freq, ni, nt2, Nx_sub, nx_win
 
     return Vel_rec
 
-inicio = time.time()
-Velocidade_Reconstruida = inversao_layer_peeling(P_canal, W_canal, xi, w_freq, ni, nt2, Nx_sub, nx_win)
-print(f"-> Inversão 2D concluída com sucesso em {time.time() - inicio:.2f} segundos!")
 
-# 4. Comparativo Visual: Real vs Reconstruído
+vel_inversao = inversao(P_canal, W_canal, xi, w0, ni, nt2, Nx_idx, n_sens)
+print("Inversão Concluida")
+
+#visualização
 fig, axes = plt.subplots(2, 1, figsize=(12, 8))
 
-im1 = axes[0].imshow(Vp_real, aspect='auto', cmap='jet', vmin=1500, vmax=4500)
+im1 = axes[0].imshow(Vel_idx, aspect='auto', cmap='jet', vmin=1500, vmax=4500)
 axes[0].set_title('Modelo Marmousi Real - Dividido', fontweight='bold')
 axes[0].set_ylabel('Profundidade')
 fig.colorbar(im1, ax=axes[0], label='Velocidade (m/s)')
 
-im2 = axes[1].imshow(Velocidade_Reconstruida, aspect='auto', cmap='jet', vmin=1500, vmax=4500)
+im2 = axes[1].imshow(vel_inversao, aspect='auto', cmap='jet', vmin=1500, vmax=4500)
 axes[1].set_title('Marmousi Reconstruído', fontweight='bold')
 axes[1].set_xlabel('X')
 axes[1].set_ylabel('Profundidade')
 fig.colorbar(im2, ax=axes[1], label='Velocidade (m/s)')
 
 plt.tight_layout()
-plt.savefig('marmousi_comparativo_inversao.png', dpi=300)
-print("-> Imagem comparativa salva como 'marmousi_comparativo_inversao.png'")
+plt.savefig('marmousi_inversao.png', dpi=300)
+print("Imagem Salva")

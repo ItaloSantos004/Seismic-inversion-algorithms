@@ -1,56 +1,57 @@
 import numpy as np
 import scipy.io as sio
 from numba import njit, prange
-import time
 
+#matrizes reais marmousi
 dados = sio.loadmat('marmousi_matrizes.mat')
-Vp_full = np.ascontiguousarray(dados['Vp']).astype(np.float32)
+Vel = np.ascontiguousarray(dados['Vp']).astype(np.float32)
 
-dx = 50.0                
-w_freq = 2 * np.pi * 50  
-nx_win = 31           
-ni = 2800          
+#parametros
+dx = 50.0  #espaçamento de 50m               
+w0 = 2 * np.pi * 50  
+n_sens = 31 #numero de sensores na janela          
+ni = 2800 #percorre todos os 3,5 km          
 nt = 5600                
 
-# Subamostrando as colunas do Marmousi para casar com o dx seguro
-passo_subamostragem = int(dx // 1.25)
-Vp_sub = Vp_full[:ni, ::passo_subamostragem]
-Nz_sub, Nx_sub = Vp_sub.shape
+#pegando os dados amostrados
+idx = int(dx // 1.25) #criando um passo maior de 50m
+Vel_idx = Vel[:ni, ::idx]
+Nz_idx, Nx_idx = Vel_idx.shape
 
-print(f"-> Marmousi subamostrado para {Nx_sub} colunas e {Nz_sub} camadas.")
+print(f"Amostragem dos dados para {Nx_idx} colunas e {Nz_idx} camadas.")
 
-# Matrizes temporárias para guardar os dados complexos no domínio dos ângulos
-P_cube_complex = np.zeros((Nx_sub, nx_win, nt), dtype=np.complex64)
-W_cube_complex = np.zeros((Nx_sub, nx_win, nt), dtype=np.complex64)
+#matrizes no domínio dos ângulos
+P_ang = np.zeros((Nx_idx, n_sens, nt), dtype=np.complex64)
+W_ang = np.zeros((Nx_idx, n_sens, nt), dtype=np.complex64)
 
-# Matrizes finais reais para os sensores
-P_cube = np.zeros((Nx_sub, nx_win, nt), dtype=np.float32)
-W_cube = np.zeros((Nx_sub, nx_win, nt), dtype=np.float32)
+#matrizes finais
+P_real = np.zeros((Nx_idx, n_sens, nt), dtype=np.float32)
+W_real = np.zeros((Nx_idx, n_sens, nt), dtype=np.float32)
 
-# Vetor de números de onda espaciais
-xi = (2 * np.pi / (nx_win * dx)) * np.arange(-(nx_win//2), (nx_win//2) + 1, dtype=np.float32)
+#vetor do numero de onda
+xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1, dtype=np.float32)
 fonte = np.zeros(nt, dtype=np.float32)
-fonte[2] = 1.0 # Pulso na superfície
+fonte[2] = 1.0 #fonte
 
+print("Modelagem Direta")
+#loop direto para gerar os dados
 @njit(parallel=True, fastmath=True)
-def gerar_dados_diretos_numba(Vp_sub, P_cube_comp, W_cube_comp, xi, fonte, w_freq, ni, nt, Nx_sub, nx_win):
-    for col in prange(Nx_sub):
-        if col % 10 == 0:
-            print("Modelagem Direta - Processando coluna:", col, "de", Nx_sub)
+def geradorPW(Vel_idx, Paux, Waux, xi, fonte, w0, ni, nt, Nx_idx, n_sens):
+    for col in prange(Nx_idx):
             
-        creal = Vp_sub[:, col]
-        preal = np.ones(ni, dtype=np.float32) * 1000.0
+        creal = Vel_idx[:, col]
+        preal = np.ones(ni, dtype=np.float32) * 1000.0 #densidade constante
         
-        Pteo = np.zeros((nx_win, nt), dtype=np.complex64)
-        Wteo = np.zeros((nx_win, nt), dtype=np.complex64)
+        Pteo = np.zeros((n_sens, nt), dtype=np.complex64)
+        Wteo = np.zeros((n_sens, nt), dtype=np.complex64)
         
-        for m in range(nx_win):
+        for m in range(n_sens):
             Zm = np.zeros(ni, dtype=np.complex64)
             for i in range(ni):
-                termo = (w_freq / creal[i])**2 - xi[m]**2
+                termo = (w0 / creal[i])**2 - xi[m]**2
                 if termo > 0:
                     kz = np.sqrt(termo)
-                    Zm[i] = preal[i] * w_freq / kz
+                    Zm[i] = preal[i] * w0 / kz
                 else:
                     Zm[i] = Zm[i-1] if i > 0 else (preal[i] * creal[i])
             
@@ -79,20 +80,18 @@ def gerar_dados_diretos_numba(Vp_sub, P_cube_comp, W_cube_comp, xi, fonte, w_fre
             Wteo[m, :] = W[0, :]
             
         for j in range(nt):
-            P_cube_comp[col, :, j] = Pteo[:, j]
-            W_cube_comp[col, :, j] = Wteo[:, j]
+            Paux[col, :, j] = Pteo[:, j]
+            Waux[col, :, j] = Wteo[:, j]
 
-inicio = time.time()
-print("-> Iniciando motor paralelo (Numba)...")
-gerar_dados_diretos_numba(Vp_sub, P_cube_complex, W_cube_complex, xi, fonte, w_freq, ni, nt, Nx_sub, nx_win)
+print("gerando os dados PW")
+geradorPW(Vel_idx, P_ang, W_ang, xi, fonte, w0, ni, nt, Nx_idx, n_sens)
 
-print("-> Aplicando Transformada Inversa (IFFT) via NumPy...")
-for col in range(Nx_sub):
+print("aplicando transformada de Fourier")
+for col in range(Nx_idx):
     for j in range(nt):
-        P_cube[col, :, j] = np.real(np.fft.ifft(np.fft.ifftshift(P_cube_complex[col, :, j])))
-        W_cube[col, :, j] = np.real(np.fft.ifft(np.fft.ifftshift(W_cube_complex[col, :, j])))
+        P_real[col, :, j] = np.real(np.fft.ifft(np.fft.ifftshift(P_ang[col, :, j])))
+        W_real[col, :, j] = np.real(np.fft.ifft(np.fft.ifftshift(W_ang[col, :, j])))
 
-np.savez('dados_marmousi_P_W.npz', P_cube=P_cube, W_cube=W_cube, Vp_real=Vp_sub)
+np.savez('dados_marmousi_P_W.npz', P_real=P_real, W_real=W_real, Vp_real=Vel_idx)
 
-print(f"-> Dados P e W gerados com sucesso em {time.time() - inicio:.2f} segundos!")
-print("-> Ficheiro guardado como 'dados_marmousi_P_W.npz'")
+print("Dados salvos")
