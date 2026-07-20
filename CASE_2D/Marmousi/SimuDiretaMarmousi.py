@@ -7,7 +7,7 @@ import imageio.v2 as imageio
 from numba import njit, prange
 
 #carregando os dados do Marmousi
-print("Carregando dados do Marmousi...")
+print("Carregando dados do Marmousi")
 dados = sio.loadmat('marmousi_matrizes.mat')
 
 Vp_marm = np.ascontiguousarray(dados['Vp']).astype(np.float32)
@@ -165,7 +165,6 @@ for n in range(1, tempo + 1):
         U_visivel = U[0:Nz_marm, L_pml:L_pml + Nx_marm, p3] #plota só a grade do marmousi
         
         if n == 250:
-            # Plota apenas a janela limpa com as distâncias reais
             im = ax.imshow(U_visivel, cmap='jet', vmin=-0.02, vmax=0.05, 
                            extent=[0, max_x_km, max_z_km, 0], aspect='auto')
             
