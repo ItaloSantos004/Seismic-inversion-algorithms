@@ -5,12 +5,9 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import imageio.v2 as imageio
 from numba import njit, prange
-import time
 
-# =========================================================================
-# 1. IMPORTAÇÃO E EXPANSÃO DO DOMÍNIO (MARMOUSI2 COM PADDING EXTERNO)
-# =========================================================================
-print("Carregando matrizes completas do Marmousi...")
+#carregando os dados do Marmousi
+print("Carregando dados do Marmousi...")
 dados = sio.loadmat('marmousi_matrizes.mat')
 
 Vp_marm = np.ascontiguousarray(dados['Vp']).astype(np.float32)
@@ -19,105 +16,88 @@ dz = np.float32(np.squeeze(dados['dz']))
 
 Nz_marm, Nx_marm = Vp_marm.shape
 
-# Definindo a espessura do PML externo (300 pixels)
-L_pml = 300
+L_pml = 300 #espessura do PML
 
-# Novo tamanho total da grade (Marmousi + Bordas PML)
-# Topo (z=0) mantém-se como superfície livre (sem padding em cima)
+#tamanho da grade total
 Nz = Nz_marm + L_pml
 Nx = Nx_marm + (2 * L_pml)
 
-print(f"-> Tamanho original do Marmousi: {Nx_marm} x {Nz_marm} pixels.")
-print(f"-> Tamanho expandido com PML externo: {Nx} x {Nz} pixels.")
-
-# Criando a nova matriz Vp expandida
+#criando a matriz de velocidade expandida e a colocando no centro
 Vp = np.zeros((Nz, Nx), dtype=np.float32)
 
-# Insere o Marmousi no centro exato da nova matriz
 Vp[0:Nz_marm, L_pml:L_pml + Nx_marm] = Vp_marm
 
-# Preenche as extensões laterais e inferiores com os valores de borda correspondentes
+#preenche a grade do PML com os valores da borda
 for i in range(Nz_marm):
-    Vp[i, 0:L_pml] = Vp_marm[i, 0]                     # Borda esquerda
-    Vp[i, L_pml + Nx_marm:Nx] = Vp_marm[i, -1]        # Borda direita
+    Vp[i, 0:L_pml] = Vp_marm[i, 0]#borda esquerda
+    Vp[i, L_pml + Nx_marm:Nx] = Vp_marm[i, -1] #borda direita
 
 for i in range(Nz_marm, Nz):
-    Vp[i, :] = Vp[Nz_marm - 1, :]                      # Borda inferior
+    Vp[i, :] = Vp[Nz_marm - 1, :]#fundo
 
-# Coordenadas em km EXCLUSIVAS para a janela gráfica do Marmousi
+#coordenadas em km
 max_x_km = (Nx_marm - 1) * float(dx) / 1000.0
 max_z_km = (Nz_marm - 1) * float(dz) / 1000.0
 
-print(f"-> Simulando grade física (Janela) de {max_x_km:.2f} km x {max_z_km:.2f} km.")
-print(f"-> Resolução lida: dx = {dx} m, dz = {dz} m.")
-
-# =========================================================================
-# 2. PARÂMETROS DA SIMULAÇÃO (Física)
-# =========================================================================
+#parametros
 dt = np.float32(0.0001)
 tempo = 40000
 
-# Pré-calculando o quadrado da velocidade para o Numba
 Vp_sq = Vp**2 
 
-# =========================================================================
-# 3. CONFIGURAÇÃO DO STAGGERED ADE-PML NA GRADE EXPANDIDA
-# =========================================================================
+#perfil de amortecimento
 R = 0.0001    
 V_max = np.max(Vp)
 
 n_pml = 3.0
 d_max = -((n_pml + 1.0) * V_max) / (2.0 * L_pml * dx) * np.log(R)
 
+#calcula o d_max
 def get_damping(pos_in_pml, L):
     if pos_in_pml < 0: return 0.0
     if pos_in_pml > L: return d_max
     return d_max * (pos_in_pml / L)**n_pml
 
-sx = np.zeros(Nx, dtype=np.float32)
+sx = np.zeros(Nx, dtype=np.float32) #para U
 sz = np.zeros(Nz, dtype=np.float32)
-sx_half = np.zeros(Nx, dtype=np.float32)
+sx_half = np.zeros(Nx, dtype=np.float32) #para Q
 sz_half = np.zeros(Nz, dtype=np.float32)
 
 for j in range(Nx):
-    if j < L_pml: 
+    if j < L_pml:  #paredes esquerda
         sx[j] = get_damping(L_pml - j, L_pml)
         sx_half[j] = get_damping(L_pml - (j + 0.5), L_pml)
-    elif j >= Nx - L_pml: 
+    elif j >= Nx - L_pml: #parede direita
         dist_j = j - (Nx - L_pml)
         sx[j] = get_damping(dist_j + 1, L_pml)
         sx_half[j] = get_damping(dist_j + 0.5, L_pml)
 
-for i in range(Nz):
+for i in range(Nz): #fundo
     if i >= Nz - L_pml: 
         dist_i = i - (Nz - L_pml)
         sz[i] = get_damping(dist_i + 1, L_pml)
         sz_half[i] = get_damping(dist_i + 0.5, L_pml)
 
-# =========================================================================
-# 4. ALOCAÇÃO DE VARIÁVEIS E FONTE PRÓXIMA À BORDA
-# =========================================================================
+#variaveis
 U  = np.zeros((Nz, Nx, 3), dtype=np.float32)
 Qx = np.zeros((Nz, Nx, 2), dtype=np.float32)
 Qz = np.zeros((Nz, Nx, 2), dtype=np.float32)
 
+#fonte
 t0 = np.float32(0.1)
 s = np.float32(0.02)
-
-# Fonte posicionada perto do canto inferior direito do domínio Marmousi para teste de borda
 z0 = 4            
 x0 = 6000
 
+#indices
 p1, p2, p3 = 0, 1, 2
 q1, q2 = 0, 1
 
-# =========================================================================
-# 5. O MOTOR DE ALTA PERFORMANCE (Numba JIT)
-# =========================================================================
+#função para calcular propagação com PML
 @njit(parallel=True, fastmath=True)
 def calcular_propagacao_marmousi(U, Qx, Qz, sx, sx_half, sz, sz_half, Vp_sq, dx, dz, dt, p1, p2, p3, q1, q2, Nz, Nx):
     
-    # 1. Memória Horizontal (Qx)
+    #Atualizando Qx
     for i in prange(1, Nz - 1):
         for j in range(0, Nx - 1):
             du_dx = (U[i, j+1, p2] - U[i, j, p2]) / dx
@@ -128,7 +108,7 @@ def calcular_propagacao_marmousi(U, Qx, Qz, sx, sx_half, sz, sz_half, Vp_sq, dx,
             A_plus  = 1.0 + (sx_val * dt / 2.0)
             Qx[i, j, q2] = (A_minus * Qx[i, j, q1] - dt * (sx_val - sz_val) * du_dx) / A_plus
 
-    # 2. Memória Vertical (Qz)
+    #Atualizando Qz
     for i in prange(0, Nz - 1):
         for j in range(1, Nx - 1):
             du_dz = (U[i+1, j, p2] - U[i, j, p2]) / dz
@@ -139,7 +119,7 @@ def calcular_propagacao_marmousi(U, Qx, Qz, sx, sx_half, sz, sz_half, Vp_sq, dx,
             A_plus  = 1.0 + (sz_val * dt / 2.0)
             Qz[i, j, q2] = (A_minus * Qz[i, j, q1] - dt * (sz_val - sx_val) * du_dz) / A_plus
 
-    # 3. Atualização da Onda Acústica Principal (U)
+    #Atualizando a onda principal U
     for i in prange(1, Nz - 1):
         for j in range(1, Nx - 1):
             
@@ -161,37 +141,28 @@ def calcular_propagacao_marmousi(U, Qx, Qz, sx, sx_half, sz, sz_half, Vp_sq, dx,
 
             U[i, j, p3] = (2.0 * U[i, j, p2] - A_u_minus * U[i, j, p1] + (dt**2) * termo_fonte) / A_u_plus
 
-# =========================================================================
-# 6. CONFIGURAÇÃO DO GIF E LOOP TEMPORAL
-# =========================================================================
+#loop temporal e o .gif
 arq_gif = 'simulacao_marmousi.gif'
 writer = imageio.get_writer(arq_gif, mode='I', duration=0.15, loop=0)
 
 fig, ax = plt.subplots(figsize=(10, 5))
 
-print("===================================================")
-print("INICIANDO PROPAGAÇÃO OTIMIZADA COM NUMBA JIT...")
-print("===================================================")
-
-inicio_timer = time.time()
+print("Iniciando propagação e gravando .gif")
 
 for n in range(1, tempo + 1):
     t_atual = np.float32(n * dt)
     
     calcular_propagacao_marmousi(U, Qx, Qz, sx, sx_half, sz, sz_half, Vp_sq, dx, dz, dt, p1, p2, p3, q1, q2, Nz, Nx)
     
-    # Injeção da Fonte
+    #fonte
     f = np.exp(-((t_atual - t0) / s)**2, dtype=np.float32)
     U[z0, x0, p3] += f
     
-    # Superfície Livre 
+    #condição de dirichlet na superficie
     U[0, :, p3] = 0.0
     
     if n % 250 == 0:
-        
-        # A MÁGICA VISUAL: Recorta apenas o Domínio Físico do Marmousi
-        # Oculta os L_pml pixels das bordas esquerda, direita e fundo
-        U_visivel = U[0:Nz_marm, L_pml:L_pml + Nx_marm, p3]
+        U_visivel = U[0:Nz_marm, L_pml:L_pml + Nx_marm, p3] #plota só a grade do marmousi
         
         if n == 250:
             # Plota apenas a janela limpa com as distâncias reais
@@ -211,7 +182,7 @@ for n in range(1, tempo + 1):
         imagem_matriz = rgba.copy() 
         
         writer.append_data(imagem_matriz)
-        print(f"-> Andamento: Passo {n} / {tempo} concluído...")
+        print(f"Passo {n} / {tempo}")
 
     p1, p2, p3 = p2, p3, p1
     q1, q2 = q2, q1
@@ -219,6 +190,4 @@ for n in range(1, tempo + 1):
 writer.close()
 plt.close()
 
-tempo_execucao = time.time() - inicio_timer
-print(f"\nSimulação finalizada com sucesso em {tempo_execucao:.2f} segundos!")
-print(f"Ficheiro guardado como: {arq_gif}")
+print("Finalizado")
