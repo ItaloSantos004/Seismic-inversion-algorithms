@@ -57,8 +57,8 @@ fig.colorbar(im2, ax=axes[1], label='Velocidade (m/s)')
 
 #erro
 im3 = axes[2].imshow(rel_erro, aspect='auto', cmap='hot', vmin=0, vmax=10, extent=eixo)
-axes[2].set_title('Erro Relativo (%)', fontweight='bold')
-axes[2].set_xlabel('Distância X (km)')
+axes[2].set_title('Erro (%)', fontweight='bold')
+axes[2].set_xlabel('X (km)')
 axes[2].set_ylabel('Profundidade (km)')
 fig.colorbar(im3, ax=axes[2], label='Erro (%)')
 
