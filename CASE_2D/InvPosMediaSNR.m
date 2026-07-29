@@ -156,10 +156,11 @@ end
 
 disp('Tirando a Média Final');
 
-
 prec_final = mean(prec_tiros, 1);
 crec_final = mean(crec_tiros, 1);
-Zrec_final = prec_final .* crec_final; 
+
+Z_tiros = prec_tiros .* crec_tiros; 
+Zrec_final = mean(Z_tiros, 1); 
 
 fig = figure;
 subplot(3, 1, 1);
