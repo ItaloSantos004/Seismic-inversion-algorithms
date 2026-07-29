@@ -21,12 +21,12 @@ xi2 = (xi(:).^2);
 lb = [900, 1400];  
 ub = [6000, 4000]; 
 
-opt_fmin = optimset('MaxFunEvals', 1000, 'MaxIter', 1000, 'Display', 'off');
+op = optimset('MaxFunEvals', 1000, 'MaxIter', 1000, 'Display', 'off');
 
 %injeção do ruido SNR + loop da quantidade de vezes
 %roda tudo e no fim tira a media
-SNR_dB = 10; 
-N_tiros = 100; 
+SNR_dB = 40; 
+N_tiros = 1; 
 
 prec_tiros = zeros(N_tiros, ni);
 crec_tiros = zeros(N_tiros, ni);
@@ -94,16 +94,16 @@ for tiro = 1:N_tiros
         prec(1) = chute_rho; crec(1) = chute_c;
     else
         xi3 = xi2(validos); Z_medido = real(Zcam(validos)); 
-        fun_min = @(p) sum( abs( Z_medido - (p(1)*w) ./ sqrt( (w/p(2)).^2 - xi3 ) ).^2 );
+        min1 = @(p) sum( abs( Z_medido - (p(1)*w) ./ sqrt( (w/p(2)).^2 - xi3 ) ).^2 );
         
         try
             %uso sqp pois achei mais preciso, caso não de pra usar uso a minimização abaixo
-            pc = sqp([chute_rho, chute_c], fun_min, [], [], lb, ub);
+            pc = sqp([chute_rho, chute_c], min1, [], [], lb, ub);
         catch
-            fun_min_fmin = @(p) sum( abs( Z_medido - (p(1)*w) ./ sqrt( max((w/p(2)).^2 - xi3, 1e-10) ) ).^2 ) ...
+            min2 = @(p) sum( abs( Z_medido - (p(1)*w) ./ sqrt( max((w/p(2)).^2 - xi3, 1e-10) ) ).^2 ) ...
                                 + 1e10 * (p(1) < lb(1)) + 1e10 * (p(1) > ub(1)) ...
                                 + 1e10 * (p(2) < lb(2)) + 1e10 * (p(2) > ub(2));
-            pc = fminsearch(fun_min_fmin, [chute_rho, chute_c], opt_fmin);
+            pc = fminsearch(min2, [chute_rho, chute_c], op);
         end
                        
         prec(1) = pc(1); crec(1) = pc(2); chute_rho = prec(1); chute_c = crec(1);
@@ -131,15 +131,15 @@ for tiro = 1:N_tiros
             prec(i) = prec(i-1); crec(i) = crec(i-1);
         else
             xi3 = xi2(validos); Z_medido = real(Zcam(validos)); 
-            fun_min = @(p) sum( abs( Z_medido - (p(1)*w) ./ sqrt( (w/p(2)).^2 - xi3 ) ).^2 );
+            min1 = @(p) sum( abs( Z_medido - (p(1)*w) ./ sqrt( (w/p(2)).^2 - xi3 ) ).^2 );
             
             try
-                pc = sqp([chute_rho, chute_c], fun_min, [], [], lb, ub);
+                pc = sqp([chute_rho, chute_c], min1, [], [], lb, ub);
             catch
-                fun_min_fmin = @(p) sum( abs( Z_medido - (p(1)*w) ./ sqrt( max((w/p(2)).^2 - xi3, 1e-10) ) ).^2 ) ...
+                min2 = @(p) sum( abs( Z_medido - (p(1)*w) ./ sqrt( max((w/p(2)).^2 - xi3, 1e-10) ) ).^2 ) ...
                                     + 1e10 * (p(1) < lb(1)) + 1e10 * (p(1) > ub(1)) ...
                                     + 1e10 * (p(2) < lb(2)) + 1e10 * (p(2) > ub(2));
-                pc = fminsearch(fun_min_fmin, [chute_rho, chute_c], opt_fmin);
+                pc = fminsearch(min2, [chute_rho, chute_c], op);
             end
                            
             prec(i) = pc(1); crec(i) = pc(2); chute_rho = prec(i); chute_c = crec(i);

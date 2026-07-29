@@ -18,7 +18,7 @@ Zreal = preal .* creal; %impedancia real para comparação
 
 xi = (2*pi / (nx * dx)) * (-floor(nx/2):floor(nx/2)); %xi_m
 
-%gerando dados dos sensores no dominio xi_m
+%gerando dados dos sensores no domin1io xi_m
 Pteo = zeros(nx, nt);
 Wteo = zeros(nx, nt);
 
@@ -66,13 +66,13 @@ for m = 1:nx
     Wteo(m, :) = W(1, :);
 end
 
-%tranformada inversa para voltar pro dominio em x
+%tranformada inversa para voltar pro domin1io em x
 Psensor = real(ifft(ifftshift(Pteo, 1), [], 1)); %dados reias dos sensores
 Wsensor = real(ifft(ifftshift(Wteo, 1), [], 1));
 
 %AGORA É A INVERSÃO
 
-%voltamos nosso dominio para os angulos xi_m
+%voltamos nosso domin1io para os angulos xi_m
 Pcanal = real(fftshift(fft(Psensor, [], 1), 1));
 Wcanal = real(fftshift(fft(Wsensor, [], 1), 1));
 
@@ -110,22 +110,56 @@ for m = 1:nx
     Zrec(m, :) = Zinv;
 end
 
-%agora podemos separar a densidade e a velocidade fazendo regressao linear
+%Separando a velocidade e densidade
 prec = zeros(1, ni);
-crec   = zeros(1, ni);
+crec = zeros(1, ni);
 
-x = (xi(:).^2);
+xi2 = (xi(:).^2); 
+
+%limites
+lb = [900, 1400];  
+ub = [6000, 4000]; 
+op = optimset('MaxFunEvals', 1000, 'MaxIter', 1000, 'Display', 'off');
+
+chute_rho = 1000; 
+chute_c = 1500;
 
 for i = 1:ni
-    y = 1 ./ (real(Zrec(:, i)).^2); %toma a parte real para evitar ruido complexo
-
-    p = polyfit(x, y, 1); %ajuste da reta
-
-    prec(i) = sqrt( -1 / (p(1) * w^2) ); %recuperando os parametros
-    crec(i)   = sqrt(  1 / (p(2) * prec(i)^2) );
+    Zcam = Zrec(:, i); %pega a impdancia recontruida de todos os sensores
+    
+    validos = abs(real(Zcam)) > 1e-5 & isfinite(Zcam); 
+    if sum(validos) < 2 
+        if i == 1
+            prec(i) = chute_rho; crec(i) = chute_c;
+        else
+            prec(i) = prec(i-1); crec(i) = crec(i-1);
+        end
+    else
+        xi3 = xi2(validos); 
+        Z_medido = real(Zcam(validos)); 
+        
+        min1 = @(p) sum( abs( Z_medido - (p(1)*w) ./ sqrt( (w/p(2)).^2 - xi3 ) ).^2 );
+        
+        try
+            %roda o sqp primeiro pois é mais preciso, caso falhe rode a min1imazação bruta
+            pc = sqp([chute_rho, chute_c], min1, [], [], lb, ub);
+        catch
+            min2 = @(p) sum( abs( Z_medido - (p(1)*w) ./ sqrt( max((w/p(2)).^2 - xi3, 1e-10) ) ).^2 ) ...
+                                + 1e10 * (p(1) < lb(1)) + 1e10 * (p(1) > ub(1)) ...
+                                + 1e10 * (p(2) < lb(2)) + 1e10 * (p(2) > ub(2));
+            pc = fmin1search(min2, [chute_rho, chute_c], op);
+        end
+                       
+        prec(i) = pc(1); 
+        crec(i) = pc(2); 
+        
+        %atualizando os chutes
+        chute_rho = prec(i); 
+        chute_c = crec(i);
+    end
 end
 
-Zrec2 = prec .* crec; %impedancia recuperada
+Zrec2 = prec .* crec; %impedancia reconstruida
 disp('Fim');
 
 %visualização
