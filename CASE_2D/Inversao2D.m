@@ -147,7 +147,7 @@ for i = 1:ni
             min2 = @(p) sum( abs( Z_medido - (p(1)*w) ./ sqrt( max((w/p(2)).^2 - xi3, 1e-10) ) ).^2 ) ...
                                 + 1e10 * (p(1) < lb(1)) + 1e10 * (p(1) > ub(1)) ...
                                 + 1e10 * (p(2) < lb(2)) + 1e10 * (p(2) > ub(2));
-            pc = fmin1search(min2, [chute_rho, chute_c], op);
+            pc = fminsearch(min2, [chute_rho, chute_c], op);
         end
                        
         prec(i) = pc(1); 
