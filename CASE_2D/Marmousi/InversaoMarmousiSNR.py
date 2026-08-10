@@ -1,0 +1,270 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import minimize
+from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter
+from multiprocessing import Pool, cpu_count
+import scipy.io as sio
+
+#Função para cada coluna
+def inversao(args):
+    id, Pc, Wc, xi, w0, ni, nt2, n_sens = args
+
+    print(f"Calculando coluna {id+1}")
+    
+    xi2 = xi**2
+    lim = [(900, 6000), (1400, 4000)]
+    
+    vel_id = np.zeros(ni, dtype=np.float32)
+    rho_id = np.zeros(ni, dtype=np.float32)
+    Zrec = np.zeros((n_sens, ni), dtype=np.float32)
+    
+    for m in range(n_sens):
+        Pinv = np.zeros((ni, nt2), dtype=np.float32)
+        Winv = np.zeros((ni, nt2), dtype=np.float32)
+        Zinv = np.zeros(ni, dtype=np.float32)
+        
+        #Superfície
+        for j in range(0, nt2, 2):
+            if j + 2 < nt2:
+                Pinv[0, j] = Pc[m, j + 2]
+                Winv[0, j] = Wc[m, j + 2]
+                
+        if Winv[0, 0] != 0:
+            Zinv[0] = Pinv[0, 0] / Winv[0, 0]
+        else:
+            Zinv[0] = 1.0
+            
+        #Recursão Layer-Peeling
+        for i in range(1, ni):
+            for j in range(i, nt2 - i, 2):
+                a = Winv[i-1, j-1] + Winv[i-1, j+1]
+                b = Winv[i-1, j-1] - Winv[i-1, j+1]
+                c = Pinv[i-1, j-1] + Pinv[i-1, j+1]
+                d = Pinv[i-1, j-1] - Pinv[i-1, j+1]
+                
+                if Zinv[i-1] != 0:
+                    Winv[i, j] = 0.5 * (a + d / Zinv[i-1])
+                    Pinv[i, j] = 0.5 * (Zinv[i-1] * b + c)
+                    
+            if Winv[i, i] != 0:
+                Zinv[i] = Pinv[i, i] / Winv[i, i]
+            else:
+                Zinv[i] = Zinv[i-1]
+                
+        for i in range(ni):
+            Zrec[m, i] = Zinv[i]
+            
+    #Otimizador para separar velocidade e densidade
+    chute_rho = 1000.0 
+    chute_c = 1500.0
+
+    for i in range(ni):
+        validos = np.abs(Zrec[:, i]) > 1e-5
+        
+        if np.sum(validos) < 2:
+            prec = chute_rho
+            crec = chute_c
+        else:
+            Z_medido = Zrec[validos, i]
+            xi3 = xi2[validos]
+            
+            def min_func(p):
+                rho, c = p
+                kz = np.maximum((w0 / c)**2 - xi3, 1e-10)
+                Z_teo = (rho * w0) / np.sqrt(kz)
+                return np.sum(np.abs(Z_medido - Z_teo)**2)
+            
+            try:
+                res = minimize(min_func, [chute_rho, chute_c], method='SLSQP', bounds=lim)
+                if not res.success:
+                    raise RuntimeError("SLSQP não convergiu")
+                prec = res.x[0]
+                crec = res.x[1]
+                
+            except:
+                def min2(p):
+                    rho, c = p
+                    pen = 0.0 
+                    if rho < lim[0][0]: pen += 1e10
+                    if rho > lim[0][1]: pen += 1e10
+                    if c < lim[1][0]: pen += 1e10
+                    if c > lim[1][1]: pen += 1e10
+                    
+                    kz = np.maximum((w0 / c)**2 - xi3, 1e-10)
+                    Z_teo = (rho * w0) / np.sqrt(kz)
+                    return np.sum(np.abs(Z_medido - Z_teo)**2) + pen
+                
+                op = {'maxiter': 1000, 'maxfev': 1000}
+                res2 = minimize(min2, [chute_rho, chute_c], method='Nelder-Mead', options=op)
+                prec = res2.x[0]
+                crec = res2.x[1]
+        
+        chute_rho = prec
+        chute_c = crec
+        vel_id[i] = crec
+        rho_id[i] = prec 
+
+    return id, vel_id, rho_id 
+
+if __name__ == '__main__':
+    #carregando os dados sinteticos
+    print("Carregando dados PW")
+    dados = np.load('dados_marmousi_P_W_completos.npz')
+    P_real = dados['P_real']
+    W_real = dados['W_real']
+    
+    Nx_idx, n_sens, nt = P_real.shape
+    ni = 2800                  
+    nt2 = nt 
+    dx = 50.0
+    w0 = 2 * np.pi * 50
+    xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1, dtype=np.float32)
+
+    #injetando ruido
+    SNR_dB = 40
+    N_tiros = 5
+    fator_ruido = 10.0 ** (-SNR_dB / 20.0)
+
+    Vel_acumulada = np.zeros((ni, Nx_idx), dtype=np.float32)
+    Rho_acumulada = np.zeros((ni, Nx_idx), dtype=np.float32)
+
+    num_nucleos = cpu_count()
+    print(f"Usando {num_nucleos} núcleos. Iniciando loop de tiros com SNR = {SNR_dB} dB")
+    
+    with Pool(processes=num_nucleos) as pool:
+        for tiro in range(1, N_tiros + 1):
+            print(f"Loop: {tiro}/{N_tiros}")
+            
+            P_noisy = np.zeros_like(P_real, dtype=np.float32)
+            W_noisy = np.zeros_like(W_real, dtype=np.float32)
+            
+            #Injeção de ruído em cada coluna
+            for col in range(Nx_idx):
+                rms_P = np.sqrt(np.mean(P_real[col]**2))
+                rms_W = np.sqrt(np.mean(W_real[col]**2))
+                
+                ruido_P = np.random.randn(*P_real[col].shape).astype(np.float32)
+                ruido_W = np.random.randn(*W_real[col].shape).astype(np.float32)
+                
+                P_noisy[col] = P_real[col] + (fator_ruido * rms_P) * ruido_P
+                W_noisy[col] = W_real[col] + (fator_ruido * rms_W) * ruido_W
+
+            #Transformada de Fourier
+            P_canal = np.zeros_like(P_noisy, dtype=np.float32)
+            W_canal = np.zeros_like(W_noisy, dtype=np.float32)
+            
+            for id in range(Nx_idx):
+                for j in range(nt):
+                    P_canal[id, :, j] = np.real(np.fft.fftshift(np.fft.fft(P_noisy[id, :, j])))
+                    W_canal[id, :, j] = np.real(np.fft.fftshift(np.fft.fft(W_noisy[id, :, j])))
+                    
+            arg = []
+            for id in range(Nx_idx):
+                arg.append((id, P_canal[id, :, :], W_canal[id, :, :], xi, w0, ni, nt2, n_sens))
+            
+            resultados = pool.map(inversao, arg)
+            
+            for id, vel_id, rho_id in resultados:
+                Vel_acumulada[:, id] += vel_id
+                Rho_acumulada[:, id] += rho_id
+
+    print("Tirando a média")
+    Vel_rec = Vel_acumulada / N_tiros
+    Rho_rec = Rho_acumulada / N_tiros
+
+    print("Carregando dados originais")
+    dados_marmousi = sio.loadmat('marmousi_matrizes.mat')
+    vm = np.array(dados_marmousi['Vp'], dtype=np.float32)[:ni, :]
+    rhom = np.array(dados_marmousi['Rho'], dtype=np.float32)[:ni, :]
+
+    print("Suavizando")
+    sig = 3.0
+    vm_suav = gaussian_filter(vm, sigma=sig).astype(np.float32)
+    rhom_suav = gaussian_filter(rhom, sigma=sig).astype(np.float32)
+
+    dxm = 1.25
+    nxm = vm.shape[1]
+
+    print("Interpolando matrizes invertidas")
+    xinv  = np.arange(Nx_idx) * dx 
+    xm = np.arange(nxm) * dxm
+
+    vint = np.zeros((ni, nxm), dtype=np.float32) 
+    rhoint = np.zeros((ni, nxm), dtype=np.float32)
+
+    for i in range(ni):
+        int_v = interp1d(xinv, Vel_rec[i, :], kind='cubic', fill_value='extrapolate')
+        vint[i, :] = int_v(xm)
+        
+        int_rho = interp1d(xinv, Rho_rec[i, :], kind='cubic', fill_value='extrapolate')
+        rhoint[i, :] = int_rho(xm)
+
+    print("Calculando matrizes de erro")
+    abs_erro_v = np.abs(vint - vm_suav)
+    rel_erro_v = (abs_erro_v / vm_suav) * 100
+
+    abs_erro_rho = np.abs(rhoint - rhom_suav)
+    rel_erro_rho = (abs_erro_rho / rhom_suav) * 100
+
+    print(f"Erro máximo de Velocidade: {np.max(rel_erro_v):.2f}%")
+    print(f"Erro máximo de Densidade: {np.max(rel_erro_rho):.2f}%")
+
+    xkm1 = xm[0] / 1000
+    xkm2 = xm[-1] / 1000
+    zkm = (ni * dxm) / 1000
+    eixo = [xkm1, xkm2, zkm, 0] 
+
+    #visualização velocidade
+    print("Gerando Imagem - Velocidade")
+    fig_v, axes_v = plt.subplots(3, 1, figsize=(14, 12))
+
+    min_vel, max_vel = np.min(vm_suav), np.max(vm_suav)
+
+    im1 = axes_v[0].imshow(vm_suav, aspect='auto', cmap='jet', vmin=min_vel, vmax=max_vel, extent=eixo)
+    axes_v[0].set_title('Marmousi Suavizado - Velocidade', fontweight='bold')
+    axes_v[0].set_ylabel('Profundidade (km)')
+    fig_v.colorbar(im1, ax=axes_v[0], label='Velocidade (m/s)')
+
+    im2 = axes_v[1].imshow(vint, aspect='auto', cmap='jet', vmin=min_vel, vmax=max_vel, extent=eixo)
+    axes_v[1].set_title(f'Inversão com Interpolação - Velocidade (SNR {SNR_dB}dB)', fontweight='bold')
+    axes_v[1].set_ylabel('Profundidade (km)')
+    fig_v.colorbar(im2, ax=axes_v[1], label='Velocidade (m/s)')
+
+    im3 = axes_v[2].imshow(rel_erro_v, aspect='auto', cmap='turbo', vmin=0, vmax=100, extent=eixo)
+    axes_v[2].set_title('Erro (%)', fontweight='bold')
+    axes_v[2].set_xlabel('X (km)')
+    axes_v[2].set_ylabel('Profundidade (km)')
+    fig_v.colorbar(im3, ax=axes_v[2], label='Erro (%)')
+
+    fig_v.tight_layout()
+    fig_v.savefig(f'erro_marmousi_velocidade_SNR{SNR_dB}.png', dpi=300)
+    plt.close(fig_v)
+
+    #visualização - densidade
+    print("Gerando Imagem - Densidade")
+    fig_r, axes_r = plt.subplots(3, 1, figsize=(14, 12))
+
+    min_rho, max_rho = np.min(rhom_suav), np.max(rhom_suav)
+
+    im4 = axes_r[0].imshow(rhom_suav, aspect='auto', cmap='viridis', vmin=min_rho, vmax=max_rho, extent=eixo)
+    axes_r[0].set_title('Marmousi Suavizado - Densidade', fontweight='bold')
+    axes_r[0].set_ylabel('Profundidade (km)')
+    fig_r.colorbar(im4, ax=axes_r[0], label='Densidade (kg/m³)')
+
+    im5 = axes_r[1].imshow(rhoint, aspect='auto', cmap='viridis', vmin=min_rho, vmax=max_rho, extent=eixo)
+    axes_r[1].set_title(f'Inversão com Interpolação - Densidade (SNR {SNR_dB}dB)', fontweight='bold')
+    axes_r[1].set_ylabel('Profundidade (km)')
+    fig_r.colorbar(im5, ax=axes_r[1], label='Densidade (kg/m³)')
+
+    im6 = axes_r[2].imshow(rel_erro_rho, aspect='auto', cmap='turbo', vmin=0, vmax=100, extent=eixo)
+    axes_r[2].set_title('Erro (%)', fontweight='bold')
+    axes_r[2].set_xlabel('X (km)')
+    axes_r[2].set_ylabel('Profundidade (km)')
+    fig_r.colorbar(im6, ax=axes_r[2], label='Erro (%)')
+
+    fig_r.tight_layout()
+    fig_r.savefig(f'erro_marmousi_densidade_SNR{SNR_dB}.png', dpi=300)
+    plt.close(fig_r)
+
+    print("Pronto!")
