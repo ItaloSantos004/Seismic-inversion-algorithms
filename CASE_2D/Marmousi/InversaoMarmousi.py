@@ -128,7 +128,7 @@ if __name__ == '__main__':
             P_canal[id, :, j] = np.real(np.fft.fftshift(np.fft.fft(P_real[id, :, j])))
             W_canal[id, :, j] = np.real(np.fft.fftshift(np.fft.fft(W_real[id, :, j])))
 
-    print("Iniciando Inversão das colunas")
+    print("Iniciando Inversao das colunas")
     
     #organizando os argumentos para a função
     arg = []

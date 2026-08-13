@@ -1,12 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.optimize import minimize
+from scipy.optimize import least_squares
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter
 from multiprocessing import Pool, cpu_count
 import scipy.io as sio
 
-#Função para cada coluna
+# Função para cada coluna
 def inversao(args):
     id, Pc, Wc, xi, w0, ni, nt2, n_sens = args
 
@@ -14,6 +14,10 @@ def inversao(args):
     
     xi2 = xi**2
     lim = [(900, 6000), (1400, 4000)]
+    rho_min, rho_max = lim[0]
+    c_min, c_max = lim[1]
+    Z_min = rho_min * c_min
+    Z_max = rho_max * c_max
     
     vel_id = np.zeros(ni, dtype=np.float32)
     rho_id = np.zeros(ni, dtype=np.float32)
@@ -24,40 +28,47 @@ def inversao(args):
         Winv = np.zeros((ni, nt2), dtype=np.float32)
         Zinv = np.zeros(ni, dtype=np.float32)
         
-        #Superfície
+        # Superfície
         for j in range(0, nt2, 2):
             if j + 2 < nt2:
                 Pinv[0, j] = Pc[m, j + 2]
                 Winv[0, j] = Wc[m, j + 2]
                 
-        if Winv[0, 0] != 0:
+        if Winv[0, 0] != 0 and np.isfinite(Winv[0, 0]):
             Zinv[0] = Pinv[0, 0] / Winv[0, 0]
         else:
-            Zinv[0] = 1.0
+            Zinv[0] = Z_min
             
-        #Recursão Layer-Peeling
+        Zinv[0] = np.clip(Zinv[0], Z_min, Z_max)
+            
+        # Recursão Layer-Peeling
         for i in range(1, ni):
+            Zi = Zinv[i - 1]
+            if Zi == 0 or not np.isfinite(Zi):
+                Zi = Z_min
+
             for j in range(i, nt2 - i, 2):
                 a = Winv[i-1, j-1] + Winv[i-1, j+1]
                 b = Winv[i-1, j-1] - Winv[i-1, j+1]
                 c = Pinv[i-1, j-1] + Pinv[i-1, j+1]
                 d = Pinv[i-1, j-1] - Pinv[i-1, j+1]
                 
-                if Zinv[i-1] != 0:
-                    Winv[i, j] = 0.5 * (a + d / Zinv[i-1])
-                    Pinv[i, j] = 0.5 * (Zinv[i-1] * b + c)
+                if np.isfinite(Zi) and Zi != 0:
+                    Winv[i, j] = 0.5 * (a + d / Zi)
+                    Pinv[i, j] = 0.5 * (Zi * b + c)
                     
-            if Winv[i, i] != 0:
-                Zinv[i] = Pinv[i, i] / Winv[i, i]
+            if Winv[i, i] != 0 and np.isfinite(Winv[i, i]):
+                Znovo = Pinv[i, i] / Winv[i, i]
+                Zinv[i] = np.clip(Znovo, Z_min, Z_max) if np.isfinite(Znovo) else Zinv[i-1]
             else:
                 Zinv[i] = Zinv[i-1]
                 
         for i in range(ni):
             Zrec[m, i] = Zinv[i]
             
-    #Otimizador para separar velocidade e densidade
-    chute_rho = 1000.0 
-    chute_c = 1500.0
+    # Otimizador Mínimos Quadrados (TRF) para separar velocidade e densidade
+    chute_rho = (rho_min + rho_max) / 2.0 
+    chute_c = (c_min + c_max) / 2.0
 
     for i in range(ni):
         validos = np.abs(Zrec[:, i]) > 1e-5
@@ -69,36 +80,40 @@ def inversao(args):
             Z_medido = Zrec[validos, i]
             xi3 = xi2[validos]
             
-            def min_func(p):
+            # Normalização da escala para estabilidade numérica com ruído
+            escala_Z = np.median(np.abs(Z_medido))
+            if not np.isfinite(escala_Z) or escala_Z < 1e-12:
+                escala_Z = 1.0
+
+            def residuos(p):
                 rho, c = p
-                kz = np.maximum((w0 / c)**2 - xi3, 1e-10)
-                Z_teo = (rho * w0) / np.sqrt(kz)
-                return np.sum(np.abs(Z_medido - Z_teo)**2)
+                kz2 = np.maximum((w0 / c)**2 - xi3, 1e-10)
+                kz = np.sqrt(kz2)
+                Z_teo = (rho * w0) / kz
+                if not np.all(np.isfinite(Z_teo)):
+                    Z_teo = np.nan_to_num(Z_teo, nan=0.0, posinf=Z_max, neginf=-Z_max)
+                return (Z_medido - Z_teo) / escala_Z
             
             try:
-                res = minimize(min_func, [chute_rho, chute_c], method='SLSQP', bounds=lim)
-                if not res.success:
-                    raise RuntimeError("SLSQP não convergiu")
+                res = least_squares(
+                    residuos,
+                    x0=[np.clip(chute_rho, rho_min, rho_max), np.clip(chute_c, c_min, c_max)],
+                    method='trf',
+                    bounds=([rho_min, c_min], [rho_max, c_max]),
+                    max_nfev=300
+                )
                 prec = res.x[0]
                 crec = res.x[1]
                 
-            except:
-                def min2(p):
-                    rho, c = p
-                    pen = 0.0 
-                    if rho < lim[0][0]: pen += 1e10
-                    if rho > lim[0][1]: pen += 1e10
-                    if c < lim[1][0]: pen += 1e10
-                    if c > lim[1][1]: pen += 1e10
-                    
-                    kz = np.maximum((w0 / c)**2 - xi3, 1e-10)
-                    Z_teo = (rho * w0) / np.sqrt(kz)
-                    return np.sum(np.abs(Z_medido - Z_teo)**2) + pen
-                
-                op = {'maxiter': 1000, 'maxfev': 1000}
-                res2 = minimize(min2, [chute_rho, chute_c], method='Nelder-Mead', options=op)
-                prec = res2.x[0]
-                crec = res2.x[1]
+                if not np.isfinite(prec) or not np.isfinite(crec):
+                    raise RuntimeError("Solução inválida")
+
+            except Exception:
+                prec = chute_rho
+                crec = chute_c
+
+        prec = np.clip(prec, rho_min, rho_max)
+        crec = np.clip(crec, c_min, c_max)
         
         chute_rho = prec
         chute_c = crec
@@ -108,7 +123,7 @@ def inversao(args):
     return id, vel_id, rho_id 
 
 if __name__ == '__main__':
-    #carregando os dados sinteticos
+    # Carregando os dados sinteticos
     print("Carregando dados PW")
     dados = np.load('dados_marmousi_P_W_completos.npz')
     P_real = dados['P_real']
@@ -121,9 +136,9 @@ if __name__ == '__main__':
     w0 = 2 * np.pi * 50
     xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1, dtype=np.float32)
 
-    #injetando ruido
-    SNR_dB = 40
-    N_tiros = 5
+    # Injetando ruído
+    SNR_dB = 30
+    N_tiros = 1
     fator_ruido = 10.0 ** (-SNR_dB / 20.0)
 
     Vel_acumulada = np.zeros((ni, Nx_idx), dtype=np.float32)
@@ -139,7 +154,7 @@ if __name__ == '__main__':
             P_noisy = np.zeros_like(P_real, dtype=np.float32)
             W_noisy = np.zeros_like(W_real, dtype=np.float32)
             
-            #Injeção de ruído em cada coluna
+            # Injeção de ruído em cada coluna
             for col in range(Nx_idx):
                 rms_P = np.sqrt(np.mean(P_real[col]**2))
                 rms_W = np.sqrt(np.mean(W_real[col]**2))
@@ -150,7 +165,7 @@ if __name__ == '__main__':
                 P_noisy[col] = P_real[col] + (fator_ruido * rms_P) * ruido_P
                 W_noisy[col] = W_real[col] + (fator_ruido * rms_W) * ruido_W
 
-            #Transformada de Fourier
+            # Transformada de Fourier
             P_canal = np.zeros_like(P_noisy, dtype=np.float32)
             W_canal = np.zeros_like(W_noisy, dtype=np.float32)
             
@@ -202,20 +217,29 @@ if __name__ == '__main__':
 
     print("Calculando matrizes de erro")
     abs_erro_v = np.abs(vint - vm_suav)
-    rel_erro_v = (abs_erro_v / vm_suav) * 100
+    rel_erro_v = (abs_erro_v / np.maximum(vm_suav, 1e-10)) * 100
 
     abs_erro_rho = np.abs(rhoint - rhom_suav)
-    rel_erro_rho = (abs_erro_rho / rhom_suav) * 100
+    rel_erro_rho = (abs_erro_rho / np.maximum(rhom_suav, 1e-10)) * 100
 
-    print(f"Erro máximo de Velocidade: {np.max(rel_erro_v):.2f}%")
-    print(f"Erro máximo de Densidade: {np.max(rel_erro_rho):.2f}%")
+    # Cálculo do Erro Médio, Mediana e Máximo
+    mean_erro_v = np.mean(rel_erro_v)
+    median_erro_v = np.median(rel_erro_v)
+    max_erro_v = np.max(rel_erro_v)
 
+    mean_erro_rho = np.mean(rel_erro_rho)
+    median_erro_rho = np.median(rel_erro_rho)
+    max_erro_rho = np.max(rel_erro_rho)
+
+    print(f"VELOCIDADE -> Médio: {mean_erro_v:.2f}% | Mediana: {median_erro_v:.2f}% | Máximo: {max_erro_v:.2f}%")
+    print(f"DENSIDADE  -> Médio: {mean_erro_rho:.2f}% | Mediana: {median_erro_rho:.2f}% | Máximo: {max_erro_rho:.2f}%")
+    
     xkm1 = xm[0] / 1000
     xkm2 = xm[-1] / 1000
     zkm = (ni * dxm) / 1000
     eixo = [xkm1, xkm2, zkm, 0] 
 
-    #visualização velocidade
+    # Visualização - Velocidade
     print("Gerando Imagem - Velocidade")
     fig_v, axes_v = plt.subplots(3, 1, figsize=(14, 12))
 
@@ -238,10 +262,10 @@ if __name__ == '__main__':
     fig_v.colorbar(im3, ax=axes_v[2], label='Erro (%)')
 
     fig_v.tight_layout()
-    fig_v.savefig(f'erro_marmousi_velocidade_SNR{SNR_dB}.png', dpi=300)
+    fig_v.savefig(f'erro_marmousi_velocidade_{N_tiros}_SNR{SNR_dB}.png', dpi=300)
     plt.close(fig_v)
 
-    #visualização - densidade
+    # Visualização - Densidade
     print("Gerando Imagem - Densidade")
     fig_r, axes_r = plt.subplots(3, 1, figsize=(14, 12))
 
@@ -264,7 +288,7 @@ if __name__ == '__main__':
     fig_r.colorbar(im6, ax=axes_r[2], label='Erro (%)')
 
     fig_r.tight_layout()
-    fig_r.savefig(f'erro_marmousi_densidade_SNR{SNR_dB}.png', dpi=300)
+    fig_r.savefig(f'erro_marmousi_densidade_{N_tiros}_SNR{SNR_dB}.png', dpi=300)
     plt.close(fig_r)
 
     print("Pronto!")
