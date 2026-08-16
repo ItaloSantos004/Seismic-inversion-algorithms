@@ -137,7 +137,7 @@ if __name__ == '__main__':
     xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1, dtype=np.float32)
 
     # Injetando ruído
-    SNR_dB = 30
+    SNR_dB = 40
     N_tiros = 1
     fator_ruido = 10.0 ** (-SNR_dB / 20.0)
 
@@ -215,25 +215,39 @@ if __name__ == '__main__':
         int_rho = interp1d(xinv, Rho_rec[i, :], kind='cubic', fill_value='extrapolate')
         rhoint[i, :] = int_rho(xm)
 
-    print("Calculando matrizes de erro")
+    print("Calculando matrizes de erro e impedância")
+    # Cálculo das Impedâncias
+    Zm_suav = rhom_suav * vm_suav
+    Zint = rhoint * vint
+
     abs_erro_v = np.abs(vint - vm_suav)
     rel_erro_v = (abs_erro_v / np.maximum(vm_suav, 1e-10)) * 100
 
     abs_erro_rho = np.abs(rhoint - rhom_suav)
     rel_erro_rho = (abs_erro_rho / np.maximum(rhom_suav, 1e-10)) * 100
 
-    # Cálculo do Erro Médio, Mediana e Máximo
-    mean_erro_v = np.mean(rel_erro_v)
-    median_erro_v = np.median(rel_erro_v)
-    max_erro_v = np.max(rel_erro_v)
+    abs_erro_Z = np.abs(Zint - Zm_suav)
+    rel_erro_Z = (abs_erro_Z / np.maximum(Zm_suav, 1e-10)) * 100
 
-    mean_erro_rho = np.mean(rel_erro_rho)
-    median_erro_rho = np.median(rel_erro_rho)
-    max_erro_rho = np.max(rel_erro_rho)
+    # Cálculo do Erro Médio, Mediana e Máximo
+    mean_erro_v, median_erro_v, max_erro_v = np.mean(rel_erro_v), np.median(rel_erro_v), np.max(rel_erro_v)
+    mean_erro_rho, median_erro_rho, max_erro_rho = np.mean(rel_erro_rho), np.median(rel_erro_rho), np.max(rel_erro_rho)
+    mean_erro_Z, median_erro_Z, max_erro_Z = np.mean(rel_erro_Z), np.median(rel_erro_Z), np.max(rel_erro_Z)
 
     print(f"VELOCIDADE -> Médio: {mean_erro_v:.2f}% | Mediana: {median_erro_v:.2f}% | Máximo: {max_erro_v:.2f}%")
     print(f"DENSIDADE  -> Médio: {mean_erro_rho:.2f}% | Mediana: {median_erro_rho:.2f}% | Máximo: {max_erro_rho:.2f}%")
+    print(f"IMPEDÂNCIA -> Médio: {mean_erro_Z:.2f}% | Mediana: {median_erro_Z:.2f}% | Máximo: {max_erro_Z:.2f}%")
     
+    # Salvando estatísticas em um arquivo txt
+    nome_arquivo_txt = f'estatisticas_erro_{N_tiros}_SNR{SNR_dB}.txt'
+    with open(nome_arquivo_txt, 'w', encoding='utf-8') as f:
+        f.write(f"Resultados da Inversão Sísmica - {N_tiros} tiro(s) | SNR: {SNR_dB} dB\n")
+        f.write("-" * 65 + "\n")
+        f.write(f"VELOCIDADE -> Erro Médio: {mean_erro_v:.2f}% | Mediana: {median_erro_v:.2f}% | Máximo: {max_erro_v:.2f}%\n")
+        f.write(f"DENSIDADE  -> Erro Médio: {mean_erro_rho:.2f}% | Mediana: {median_erro_rho:.2f}% | Máximo: {max_erro_rho:.2f}%\n")
+        f.write(f"IMPEDÂNCIA -> Erro Médio: {mean_erro_Z:.2f}%   | Mediana: {median_erro_Z:.2f}% | Máximo: {max_erro_Z:.2f}%\n")
+    print(f"Estatísticas de erro salvas no arquivo: {nome_arquivo_txt}")
+
     xkm1 = xm[0] / 1000
     xkm2 = xm[-1] / 1000
     zkm = (ni * dxm) / 1000
@@ -242,7 +256,6 @@ if __name__ == '__main__':
     # Visualização - Velocidade
     print("Gerando Imagem - Velocidade")
     fig_v, axes_v = plt.subplots(3, 1, figsize=(14, 12))
-
     min_vel, max_vel = np.min(vm_suav), np.max(vm_suav)
 
     im1 = axes_v[0].imshow(vm_suav, aspect='auto', cmap='jet', vmin=min_vel, vmax=max_vel, extent=eixo)
@@ -268,7 +281,6 @@ if __name__ == '__main__':
     # Visualização - Densidade
     print("Gerando Imagem - Densidade")
     fig_r, axes_r = plt.subplots(3, 1, figsize=(14, 12))
-
     min_rho, max_rho = np.min(rhom_suav), np.max(rhom_suav)
 
     im4 = axes_r[0].imshow(rhom_suav, aspect='auto', cmap='viridis', vmin=min_rho, vmax=max_rho, extent=eixo)
@@ -290,5 +302,30 @@ if __name__ == '__main__':
     fig_r.tight_layout()
     fig_r.savefig(f'erro_marmousi_densidade_{N_tiros}_SNR{SNR_dB}.png', dpi=300)
     plt.close(fig_r)
+
+    # Visualização - Impedância
+    print("Gerando Imagem - Impedância")
+    fig_z, axes_z = plt.subplots(3, 1, figsize=(14, 12))
+    min_Z, max_Z = np.min(Zm_suav), np.max(Zm_suav)
+
+    im7 = axes_z[0].imshow(Zm_suav, aspect='auto', cmap='magma', vmin=min_Z, vmax=max_Z, extent=eixo)
+    axes_z[0].set_title('Marmousi Suavizado - Impedância', fontweight='bold')
+    axes_z[0].set_ylabel('Profundidade (km)')
+    fig_z.colorbar(im7, ax=axes_z[0], label='Impedância (kg/(m²s))')
+
+    im8 = axes_z[1].imshow(Zint, aspect='auto', cmap='magma', vmin=min_Z, vmax=max_Z, extent=eixo)
+    axes_z[1].set_title(f'Inversão com Interpolação - Impedância (SNR {SNR_dB}dB)', fontweight='bold')
+    axes_z[1].set_ylabel('Profundidade (km)')
+    fig_z.colorbar(im8, ax=axes_z[1], label='Impedância (kg/(m²s))')
+
+    im9 = axes_z[2].imshow(rel_erro_Z, aspect='auto', cmap='turbo', vmin=0, vmax=100, extent=eixo)
+    axes_z[2].set_title('Erro (%)', fontweight='bold')
+    axes_z[2].set_xlabel('X (km)')
+    axes_z[2].set_ylabel('Profundidade (km)')
+    fig_z.colorbar(im9, ax=axes_z[2], label='Erro (%)')
+
+    fig_z.tight_layout()
+    fig_z.savefig(f'erro_marmousi_impedancia_{N_tiros}_SNR{SNR_dB}.png', dpi=300)
+    plt.close(fig_z)
 
     print("Pronto!")
