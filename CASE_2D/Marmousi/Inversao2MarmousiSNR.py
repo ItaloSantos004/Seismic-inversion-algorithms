@@ -268,7 +268,7 @@ if __name__ == '__main__':
     print("-" * 65)
     
     # Salvando estatísticas em um arquivo txt
-    nome_arquivo_txt = f'estatisticas_erro_{N_tiros}_SNR{SNR_dB}.txt'
+    nome_arquivo_txt = f'estatisticas_erro2_{N_tiros}_SNR{SNR_dB}.txt'
     with open(nome_arquivo_txt, 'w', encoding='utf-8') as f:
         f.write(f"Resultados da Inversão Sísmica - {N_tiros} tiro(s) | SNR: {SNR_dB} dB\n")
         f.write("-" * 65 + "\n")

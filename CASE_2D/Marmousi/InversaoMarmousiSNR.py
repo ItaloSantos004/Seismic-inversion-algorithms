@@ -137,8 +137,8 @@ if __name__ == '__main__':
     xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1, dtype=np.float32)
 
     # Injetando ruído
-    SNR_dB = 40
-    N_tiros = 1
+    SNR_dB = 20
+    N_tiros = 5
     fator_ruido = 10.0 ** (-SNR_dB / 20.0)
 
     Vel_acumulada = np.zeros((ni, Nx_idx), dtype=np.float32)

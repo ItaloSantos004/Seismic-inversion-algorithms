@@ -1,0 +1,5 @@
+Resultados da Inversão Sísmica - 1 tiro(s) | SNR: 20 dB
+-----------------------------------------------------------------
+VELOCIDADE -> Erro Médio: 17.07% | Mediana: 12.52% | Máximo: 161.47%
+DENSIDADE  -> Erro Médio: 26.33% | Mediana: 17.20% | Máximo: 219.88%
+IMPEDÂNCIA -> Erro Médio: 3.94%   | Mediana: 2.25% | Máximo: 76.12%
