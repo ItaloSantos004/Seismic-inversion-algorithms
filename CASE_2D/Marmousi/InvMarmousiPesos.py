@@ -6,12 +6,10 @@ from scipy.ndimage import gaussian_filter
 from multiprocessing import Pool, cpu_count
 import scipy.io as sio
 
-# Função para cada coluna
+# Função para cada coluna adaptada para receber o alpha
 def inversao(args):
-    id, Pc, Wc, xi, w0, ni, nt2, n_sens = args
+    id, Pc, Wc, xi, w0, ni, nt2, n_sens, alpha = args
 
-    print(f"Calculando coluna {id+1}")
-    
     xi2 = xi**2
     lim = [(900, 6000), (1400, 4000)]
     rho_min, rho_max = lim[0]
@@ -83,21 +81,20 @@ def inversao(args):
             Z_medido = Zrec[validos, i]
             xi3 = xi2[validos]
             
-            # Normalização da escala para estabilidade numérica com ruído
             escala_Z = np.median(np.abs(Z_medido))
             if not np.isfinite(escala_Z) or escala_Z < 1e-12:
                 escala_Z = 1.0
 
-            # Definindo limites para Impedância
             Z0_min = rho_min * c_min
             Z0_max = rho_max * c_max
             chute_Z0 = chute_rho * chute_c
 
-            # NOVO: Criando os pesos Gaussianos para essa profundidade
+            # Pesos Gaussianos dinâmicos baseados no alpha do loop
             xi_valid = xi[validos]
-            xi_max = np.max(np.abs(xi)) # Pega o maior ângulo possível do arranjo
-            alpha = 0.6 # Fator de sintonia (ajuste entre 0.4 e 1.0 se precisar)
-            pesos_gauss = np.exp(- (xi_valid / (alpha * xi_max))**2)
+            xi_max = np.max(np.abs(xi))
+            
+            pesos_gauss = 0.10 + 0.90 * (1.0 - np.exp(- (xi_valid / (alpha * xi_max))**2))
+            #pesos_gauss = np.exp(- (xi_valid / (alpha * xi_max))**2)
 
             def residuos_reparam(p):
                 Z0, c_opt = p
@@ -108,7 +105,6 @@ def inversao(args):
                 if not np.all(np.isfinite(Z_teo)):
                     Z_teo = np.nan_to_num(Z_teo, nan=0.0, posinf=Z_max, neginf=-Z_max)
                 
-                # NOVO: O erro é multiplicado pelos pesos da Gaussiana
                 erro_puro = (Z_medido - Z_teo) / escala_Z
                 return erro_puro * pesos_gauss 
             
@@ -148,7 +144,6 @@ def inversao(args):
 
 
 if __name__ == '__main__':
-    # Carregando os dados sinteticos
     print("Carregando dados PW")
     dados = np.load('dados_marmousi_P_W_completos.npz')
     P_real = dados['P_real']
@@ -161,37 +156,61 @@ if __name__ == '__main__':
     w0 = 2 * np.pi * 50
     xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1, dtype=np.float32)
 
-    # Injetando ruído
     SNR_dB = 20
-    N_tiros = 1
+    N_tiros = 1 # Conforme a tabela que você mostrou
     fator_ruido = 10.0 ** (-SNR_dB / 20.0)
-
-    Vel_acumulada = np.zeros((ni, Nx_idx), dtype=np.float32)
-    Rho_acumulada = np.zeros((ni, Nx_idx), dtype=np.float32)
-    Z0_acumulada = np.zeros((ni, Nx_idx), dtype=np.float32) 
-
     num_nucleos = cpu_count()
-    print(f"Usando {num_nucleos} núcleos. Iniciando loop de tiros com SNR = {SNR_dB} dB")
+
+    print("Carregando dados originais para cálculo de erro")
+    dados_marmousi = sio.loadmat('marmousi_matrizes.mat')
+    vm = np.array(dados_marmousi['Vp'], dtype=np.float32)[:ni, :]
+    rhom = np.array(dados_marmousi['Rho'], dtype=np.float32)[:ni, :]
+
+    sig = 3.0
+    vm_suav = gaussian_filter(vm, sigma=sig).astype(np.float32)
+    rhom_suav = gaussian_filter(rhom, sigma=sig).astype(np.float32)
+    Zm_suav = rhom_suav * vm_suav
+
+    dxm = 1.25
+    nxm = vm.shape[1]
+    xm = np.arange(nxm) * dxm
+    xinv = np.arange(Nx_idx) * dx 
+
+    # ========================================================
+    # LOOP DE VARREDURA DOS ALPHAS
+    # ========================================================
+    lista_alphas = [0.4]
     
-    with Pool(processes=num_nucleos) as pool:
+    for alpha in lista_alphas:
+        print("\n" + "="*50)
+        print(f"Iniciando inversão com alpha = {alpha}")
+        print("="*50)
+        
+        # Semente resetada a cada alpha para garantir que todos os alphas 
+        # testem exatamentes os mesmos dados ruidosos
+        np.random.seed(42)
+        
+        # Matrizes para acumular os resultados das inversões de todos os tiros
+        Vel_rec_acum = np.zeros((ni, Nx_idx), dtype=np.float32)
+        Rho_rec_acum = np.zeros((ni, Nx_idx), dtype=np.float32)
+        Z0_rec_acum = np.zeros((ni, Nx_idx), dtype=np.float32) 
+
+        # --- LOOP DOS TIROS (Ruído gerado individualmente por tiro) ---
         for tiro in range(1, N_tiros + 1):
-            print(f"Loop: {tiro}/{N_tiros}")
+            print(f"  -> Injetando ruído e processando tiro {tiro}/{N_tiros}...")
             
             P_noisy = np.zeros_like(P_real, dtype=np.float32)
             W_noisy = np.zeros_like(W_real, dtype=np.float32)
             
-            # Injeção de ruído em cada coluna
+            # Adicionando ruído cru ao tiro atual
             for col in range(Nx_idx):
                 rms_P = np.sqrt(np.mean(P_real[col]**2))
                 rms_W = np.sqrt(np.mean(W_real[col]**2))
                 
-                ruido_P = np.random.randn(*P_real[col].shape).astype(np.float32)
-                ruido_W = np.random.randn(*W_real[col].shape).astype(np.float32)
-                
-                P_noisy[col] = P_real[col] + (fator_ruido * rms_P) * ruido_P
-                W_noisy[col] = W_real[col] + (fator_ruido * rms_W) * ruido_W
+                P_noisy[col] = P_real[col] + (fator_ruido * rms_P) * np.random.randn(*P_real[col].shape)
+                W_noisy[col] = W_real[col] + (fator_ruido * rms_W) * np.random.randn(*W_real[col].shape)
 
-            # Transformada de Fourier
+            # Aplicando a FFT no tiro ruidoso atual
             P_canal = np.zeros_like(P_noisy, dtype=np.float32)
             W_canal = np.zeros_like(W_noisy, dtype=np.float32)
             
@@ -199,185 +218,145 @@ if __name__ == '__main__':
                 for j in range(nt):
                     P_canal[id, :, j] = np.real(np.fft.fftshift(np.fft.fft(P_noisy[id, :, j])))
                     W_canal[id, :, j] = np.real(np.fft.fftshift(np.fft.fft(W_noisy[id, :, j])))
-                    
+
+            # Preparando argumentos para o Pool deste tiro
             arg = []
             for id in range(Nx_idx):
-                arg.append((id, P_canal[id, :, :], W_canal[id, :, :], xi, w0, ni, nt2, n_sens))
+                arg.append((id, P_canal[id, :, :], W_canal[id, :, :], xi, w0, ni, nt2, n_sens, alpha))
             
-            resultados = pool.map(inversao, arg)
+            # Rodando a inversão em paralelo para este tiro
+            with Pool(processes=num_nucleos) as pool:
+                resultados = pool.map(inversao, arg)
             
-            # Desempacotando e acumulando a Impedância também
+            # Acumulando os resultados do tiro
             for id, vel_id, rho_id, Z0_id in resultados:
-                Vel_acumulada[:, id] += vel_id
-                Rho_acumulada[:, id] += rho_id
-                Z0_acumulada[:, id] += Z0_id
+                Vel_rec_acum[:, id] += vel_id
+                Rho_rec_acum[:, id] += rho_id
+                Z0_rec_acum[:, id] += Z0_id
 
-    print("Tirando a média")
-    Vel_rec = Vel_acumulada / N_tiros
-    Rho_rec = Rho_acumulada / N_tiros
-    Z0_rec_media = Z0_acumulada / N_tiros 
-
-    # ---------------------------------------------------------
-    # NOVO: Suavização Horizontal ANTES da interpolação
-    # ---------------------------------------------------------
-    print("Suavizando horizontalmente as 340 colunas (Média de 5 pontos)")
-    def suavizar_matriz_horizontal(matriz):
-        matriz_suav = np.zeros_like(matriz)
-        janela = np.array([0.2, 0.2, 0.2, 0.2, 0.2]) # Peso igual para os 5 pontos
-        # Aplica a média móvel linha por linha (em cada profundidade i)
-        for i in range(matriz.shape[0]):
-            matriz_suav[i, :] = np.convolve(matriz[i, :], janela, mode='same')
-        return matriz_suav
-
-    Vel_rec_suav = suavizar_matriz_horizontal(Vel_rec)
-    Rho_rec_suav = suavizar_matriz_horizontal(Rho_rec)
-    Z0_rec_suav  = suavizar_matriz_horizontal(Z0_rec_media)
-    # ---------------------------------------------------------
-
-    print("Carregando dados originais")
-    dados_marmousi = sio.loadmat('marmousi_matrizes.mat')
-    vm = np.array(dados_marmousi['Vp'], dtype=np.float32)[:ni, :]
-    rhom = np.array(dados_marmousi['Rho'], dtype=np.float32)[:ni, :]
-
-    print("Suavizando modelo real para comparação")
-    sig = 3.0
-    vm_suav = gaussian_filter(vm, sigma=sig).astype(np.float32)
-    rhom_suav = gaussian_filter(rhom, sigma=sig).astype(np.float32)
-
-    dxm = 1.25
-    nxm = vm.shape[1]
-
-    print("Interpolando matrizes invertidas e já suavizadas")
-    xinv  = np.arange(Nx_idx) * dx 
-    xm = np.arange(nxm) * dxm
-
-    vint = np.zeros((ni, nxm), dtype=np.float32) 
-    rhoint = np.zeros((ni, nxm), dtype=np.float32)
-    Zint = np.zeros((ni, nxm), dtype=np.float32) 
-
-    for i in range(ni):
-        # NOVO: Usando as matrizes '_suav' na interpolação
-        int_v = interp1d(xinv, Vel_rec_suav[i, :], kind='cubic', fill_value='extrapolate')
-        vint[i, :] = int_v(xm)
+        # --- FIM DO LOOP DE TIROS ---
         
-        int_rho = interp1d(xinv, Rho_rec_suav[i, :], kind='cubic', fill_value='extrapolate')
-        rhoint[i, :] = int_rho(xm)
+        # Tirando a Média dos Resultados PÓS-Inversão
+        print(f"Calculando médias dos resultados e interpolando (alpha={alpha})...")
+        Vel_rec = Vel_rec_acum / N_tiros
+        Rho_rec = Rho_rec_acum / N_tiros
+        Z0_rec_media = Z0_rec_acum / N_tiros
+
+        # Interpolação para malha original
+        vint = np.zeros((ni, nxm), dtype=np.float32) 
+        rhoint = np.zeros((ni, nxm), dtype=np.float32)
+        Zint = np.zeros((ni, nxm), dtype=np.float32) 
+
+        for i in range(ni):
+            int_v = interp1d(xinv, Vel_rec[i, :], kind='cubic', fill_value='extrapolate')
+            vint[i, :] = int_v(xm)
+            
+            int_rho = interp1d(xinv, Rho_rec[i, :], kind='cubic', fill_value='extrapolate')
+            rhoint[i, :] = int_rho(xm)
+            
+            int_Z = interp1d(xinv, Z0_rec_media[i, :], kind='cubic', fill_value='extrapolate')
+            Zint[i, :] = int_Z(xm)
+
+        # Cálculo de Erros
+        abs_erro_v = np.abs(vint - vm_suav)
+        rel_erro_v = (abs_erro_v / np.maximum(vm_suav, 1e-10)) * 100
+
+        abs_erro_rho = np.abs(rhoint - rhom_suav)
+        rel_erro_rho = (abs_erro_rho / np.maximum(rhom_suav, 1e-10)) * 100
+
+        abs_erro_Z = np.abs(Zint - Zm_suav)
+        rel_erro_Z = (abs_erro_Z / np.maximum(Zm_suav, 1e-10)) * 100
+
+        mean_erro_v, median_erro_v, max_erro_v = np.mean(rel_erro_v), np.median(rel_erro_v), np.max(rel_erro_v)
+        mean_erro_rho, median_erro_rho, max_erro_rho = np.mean(rel_erro_rho), np.median(rel_erro_rho), np.max(rel_erro_rho)
+        mean_erro_Z, median_erro_Z, max_erro_Z = np.mean(rel_erro_Z), np.median(rel_erro_Z), np.max(rel_erro_Z)
         
-        int_Z = interp1d(xinv, Z0_rec_suav[i, :], kind='cubic', fill_value='extrapolate')
-        Zint[i, :] = int_Z(xm)
+        nome_arquivo_txt = f'estatisticas2_{N_tiros}_alpha_{alpha}_SNR{SNR_dB}.txt'
+        with open(nome_arquivo_txt, 'w', encoding='utf-8') as f:
+            f.write(f"Resultados da Inversão - alpha = {alpha} | SNR: {SNR_dB} dB | Tiros: {N_tiros}\n")
+            f.write("-" * 80 + "\n")
+            f.write(f"VELOCIDADE -> Erro Médio: {mean_erro_v:.2f}% | Mediana: {median_erro_v:.2f}% | Máximo: {max_erro_v:.2f}%\n")
+            f.write(f"DENSIDADE  -> Erro Médio: {mean_erro_rho:.2f}% | Mediana: {median_erro_rho:.2f}% | Máximo: {max_erro_rho:.2f}%\n")
+            f.write(f"IMPEDÂNCIA -> Erro Médio: {mean_erro_Z:.2f}%   | Mediana: {median_erro_Z:.2f}% | Máximo: {max_erro_Z:.2f}%\n")
+        
+        xkm1, xkm2, zkm = xm[0] / 1000, xm[-1] / 1000, (ni * dxm) / 1000
+        eixo = [xkm1, xkm2, zkm, 0] 
 
-    print("Calculando matrizes de erro")
-    # Cálculo das Impedâncias reais (suavizadas)
-    Zm_suav = rhom_suav * vm_suav
+        # ========================================================
+        # SALVAR GRÁFICOS
+        # ========================================================
+        print(f"Gerando gráficos para alpha={alpha}...\n")
+        
+        # ==================== VELOCIDADE ====================
+        fig_v, axes_v = plt.subplots(3, 1, figsize=(14, 12))
+        min_vel, max_vel = np.min(vm_suav), np.max(vm_suav)
 
-    abs_erro_v = np.abs(vint - vm_suav)
-    rel_erro_v = (abs_erro_v / np.maximum(vm_suav, 1e-10)) * 100
+        im1 = axes_v[0].imshow(vm_suav, aspect='auto', cmap='jet', vmin=min_vel, vmax=max_vel, extent=eixo)
+        axes_v[0].set_title('Marmousi Suavizado - Velocidade', fontweight='bold')
+        axes_v[0].set_ylabel('Profundidade (km)')
+        fig_v.colorbar(im1, ax=axes_v[0], label='Velocidade (m/s)')
 
-    abs_erro_rho = np.abs(rhoint - rhom_suav)
-    rel_erro_rho = (abs_erro_rho / np.maximum(rhom_suav, 1e-10)) * 100
+        im2 = axes_v[1].imshow(vint, aspect='auto', cmap='jet', vmin=min_vel, vmax=max_vel, extent=eixo)
+        axes_v[1].set_title(f'Inversão Interpolada - Velocidade (alpha={alpha} | SNR {SNR_dB}dB)', fontweight='bold')
+        axes_v[1].set_ylabel('Profundidade (km)')
+        fig_v.colorbar(im2, ax=axes_v[1], label='Velocidade (m/s)')
 
-    abs_erro_Z = np.abs(Zint - Zm_suav)
-    rel_erro_Z = (abs_erro_Z / np.maximum(Zm_suav, 1e-10)) * 100
+        im3 = axes_v[2].imshow(rel_erro_v, aspect='auto', cmap='turbo', vmin=0, vmax=100, extent=eixo)
+        axes_v[2].set_title('Erro (%)', fontweight='bold')
+        axes_v[2].set_xlabel('X (km)')
+        axes_v[2].set_ylabel('Profundidade (km)')
+        fig_v.colorbar(im3, ax=axes_v[2], label='Erro (%)')
 
-    # Cálculo do Erro Médio, Mediana e Máximo
-    mean_erro_v, median_erro_v, max_erro_v = np.mean(rel_erro_v), np.median(rel_erro_v), np.max(rel_erro_v)
-    mean_erro_rho, median_erro_rho, max_erro_rho = np.mean(rel_erro_rho), np.median(rel_erro_rho), np.max(rel_erro_rho)
-    mean_erro_Z, median_erro_Z, max_erro_Z = np.mean(rel_erro_Z), np.median(rel_erro_Z), np.max(rel_erro_Z)
+        fig_v.tight_layout()
+        fig_v.savefig(f'erro2_velocidade_{N_tiros}_alpha_{alpha}_SNR{SNR_dB}.png', dpi=300)
+        plt.close(fig_v)
 
-    print("-" * 65)
-    print(f"VELOCIDADE -> Médio: {mean_erro_v:.2f}% | Mediana: {median_erro_v:.2f}% | Máximo: {max_erro_v:.2f}%")
-    print(f"DENSIDADE  -> Médio: {mean_erro_rho:.2f}% | Mediana: {median_erro_rho:.2f}% | Máximo: {max_erro_rho:.2f}%")
-    print(f"IMPEDÂNCIA -> Médio: {mean_erro_Z:.2f}% | Mediana: {median_erro_Z:.2f}% | Máximo: {max_erro_Z:.2f}%")
-    print("-" * 65)
-    
-    # Salvando estatísticas em um arquivo txt
-    nome_arquivo_txt = f'estatisticas_erro_peso_{N_tiros}_SNR{SNR_dB}.txt'
-    with open(nome_arquivo_txt, 'w', encoding='utf-8') as f:
-        f.write(f"Resultados da Inversão Sísmica - {N_tiros} tiro(s) | SNR: {SNR_dB} dB\n")
-        f.write("-" * 65 + "\n")
-        f.write(f"VELOCIDADE -> Erro Médio: {mean_erro_v:.2f}% | Mediana: {median_erro_v:.2f}% | Máximo: {max_erro_v:.2f}%\n")
-        f.write(f"DENSIDADE  -> Erro Médio: {mean_erro_rho:.2f}% | Mediana: {median_erro_rho:.2f}% | Máximo: {max_erro_rho:.2f}%\n")
-        f.write(f"IMPEDÂNCIA -> Erro Médio: {mean_erro_Z:.2f}%   | Mediana: {median_erro_Z:.2f}% | Máximo: {max_erro_Z:.2f}%\n")
-    print(f"Estatísticas de erro salvas no arquivo: {nome_arquivo_txt}")
+        # ==================== DENSIDADE ====================
+        fig_r, axes_r = plt.subplots(3, 1, figsize=(14, 12))
+        min_rho, max_rho = np.min(rhom_suav), np.max(rhom_suav)
 
-    xkm1 = xm[0] / 1000
-    xkm2 = xm[-1] / 1000
-    zkm = (ni * dxm) / 1000
-    eixo = [xkm1, xkm2, zkm, 0] 
+        im4 = axes_r[0].imshow(rhom_suav, aspect='auto', cmap='viridis', vmin=min_rho, vmax=max_rho, extent=eixo)
+        axes_r[0].set_title('Marmousi Suavizado - Densidade', fontweight='bold')
+        axes_r[0].set_ylabel('Profundidade (km)')
+        fig_r.colorbar(im4, ax=axes_r[0], label='Densidade (kg/m³)')
 
-    # Visualização - Velocidade
-    print("Gerando Imagem - Velocidade")
-    fig_v, axes_v = plt.subplots(3, 1, figsize=(14, 12))
-    min_vel, max_vel = np.min(vm_suav), np.max(vm_suav)
+        im5 = axes_r[1].imshow(rhoint, aspect='auto', cmap='viridis', vmin=min_rho, vmax=max_rho, extent=eixo)
+        axes_r[1].set_title(f'Inversão Interpolada - Densidade (alpha={alpha} | SNR {SNR_dB}dB)', fontweight='bold')
+        axes_r[1].set_ylabel('Profundidade (km)')
+        fig_r.colorbar(im5, ax=axes_r[1], label='Densidade (kg/m³)')
 
-    im1 = axes_v[0].imshow(vm_suav, aspect='auto', cmap='jet', vmin=min_vel, vmax=max_vel, extent=eixo)
-    axes_v[0].set_title('Marmousi Suavizado - Velocidade', fontweight='bold')
-    axes_v[0].set_ylabel('Profundidade (km)')
-    fig_v.colorbar(im1, ax=axes_v[0], label='Velocidade (m/s)')
+        im6 = axes_r[2].imshow(rel_erro_rho, aspect='auto', cmap='turbo', vmin=0, vmax=100, extent=eixo)
+        axes_r[2].set_title('Erro (%)', fontweight='bold')
+        axes_r[2].set_xlabel('X (km)')
+        axes_r[2].set_ylabel('Profundidade (km)')
+        fig_r.colorbar(im6, ax=axes_r[2], label='Erro (%)')
 
-    im2 = axes_v[1].imshow(vint, aspect='auto', cmap='jet', vmin=min_vel, vmax=max_vel, extent=eixo)
-    axes_v[1].set_title(f'Inversão com Interpolação - Velocidade (SNR {SNR_dB}dB)', fontweight='bold')
-    axes_v[1].set_ylabel('Profundidade (km)')
-    fig_v.colorbar(im2, ax=axes_v[1], label='Velocidade (m/s)')
+        fig_r.tight_layout()
+        fig_r.savefig(f'erro2_densidade_{N_tiros}_alpha_{alpha}_SNR{SNR_dB}.png', dpi=300)
+        plt.close(fig_r)
 
-    im3 = axes_v[2].imshow(rel_erro_v, aspect='auto', cmap='turbo', vmin=0, vmax=100, extent=eixo)
-    axes_v[2].set_title('Erro (%)', fontweight='bold')
-    axes_v[2].set_xlabel('X (km)')
-    axes_v[2].set_ylabel('Profundidade (km)')
-    fig_v.colorbar(im3, ax=axes_v[2], label='Erro (%)')
+        # ==================== IMPEDÂNCIA ====================
+        fig_z, axes_z = plt.subplots(3, 1, figsize=(14, 12))
+        min_Z, max_Z = np.min(Zm_suav), np.max(Zm_suav)
 
-    fig_v.tight_layout()
-    fig_v.savefig(f'erro_peso_velocidade_{N_tiros}_SNR{SNR_dB}.png', dpi=300)
-    plt.close(fig_v)
+        im7 = axes_z[0].imshow(Zm_suav, aspect='auto', cmap='magma', vmin=min_Z, vmax=max_Z, extent=eixo)
+        axes_z[0].set_title('Marmousi Suavizado - Impedância', fontweight='bold')
+        axes_z[0].set_ylabel('Profundidade (km)')
+        fig_z.colorbar(im7, ax=axes_z[0], label='Impedância (kg/(m²s))')
 
-    # Visualização - Densidade
-    print("Gerando Imagem - Densidade")
-    fig_r, axes_r = plt.subplots(3, 1, figsize=(14, 12))
-    min_rho, max_rho = np.min(rhom_suav), np.max(rhom_suav)
+        im8 = axes_z[1].imshow(Zint, aspect='auto', cmap='magma', vmin=min_Z, vmax=max_Z, extent=eixo)
+        axes_z[1].set_title(f'Inversão Interpolada - Impedância (alpha={alpha} | SNR {SNR_dB}dB)', fontweight='bold')
+        axes_z[1].set_ylabel('Profundidade (km)')
+        fig_z.colorbar(im8, ax=axes_z[1], label='Impedância (kg/(m²s))')
 
-    im4 = axes_r[0].imshow(rhom_suav, aspect='auto', cmap='viridis', vmin=min_rho, vmax=max_rho, extent=eixo)
-    axes_r[0].set_title('Marmousi Suavizado - Densidade', fontweight='bold')
-    axes_r[0].set_ylabel('Profundidade (km)')
-    fig_r.colorbar(im4, ax=axes_r[0], label='Densidade (kg/m³)')
+        im9 = axes_z[2].imshow(rel_erro_Z, aspect='auto', cmap='turbo', vmin=0, vmax=100, extent=eixo)
+        axes_z[2].set_title('Erro (%)', fontweight='bold')
+        axes_z[2].set_xlabel('X (km)')
+        axes_z[2].set_ylabel('Profundidade (km)')
+        fig_z.colorbar(im9, ax=axes_z[2], label='Erro (%)')
 
-    im5 = axes_r[1].imshow(rhoint, aspect='auto', cmap='viridis', vmin=min_rho, vmax=max_rho, extent=eixo)
-    axes_r[1].set_title(f'Inversão com Interpolação - Densidade (SNR {SNR_dB}dB)', fontweight='bold')
-    axes_r[1].set_ylabel('Profundidade (km)')
-    fig_r.colorbar(im5, ax=axes_r[1], label='Densidade (kg/m³)')
+        fig_z.tight_layout()
+        fig_z.savefig(f'erro2_impedancia_{N_tiros}_alpha_{alpha}_SNR{SNR_dB}.png', dpi=300)
+        plt.close(fig_z)
 
-    im6 = axes_r[2].imshow(rel_erro_rho, aspect='auto', cmap='turbo', vmin=0, vmax=100, extent=eixo)
-    axes_r[2].set_title('Erro (%)', fontweight='bold')
-    axes_r[2].set_xlabel('X (km)')
-    axes_r[2].set_ylabel('Profundidade (km)')
-    fig_r.colorbar(im6, ax=axes_r[2], label='Erro (%)')
-
-    fig_r.tight_layout()
-    fig_r.savefig(f'erro_peso_densidade_{N_tiros}_SNR{SNR_dB}.png', dpi=300)
-    plt.close(fig_r)
-
-    # Visualização - Impedância
-    print("Gerando Imagem - Impedância")
-    fig_z, axes_z = plt.subplots(3, 1, figsize=(14, 12))
-    min_Z, max_Z = np.min(Zm_suav), np.max(Zm_suav)
-
-    im7 = axes_z[0].imshow(Zm_suav, aspect='auto', cmap='magma', vmin=min_Z, vmax=max_Z, extent=eixo)
-    axes_z[0].set_title('Marmousi Suavizado - Impedância', fontweight='bold')
-    axes_z[0].set_ylabel('Profundidade (km)')
-    fig_z.colorbar(im7, ax=axes_z[0], label='Impedância (kg/(m²s))')
-
-    im8 = axes_z[1].imshow(Zint, aspect='auto', cmap='magma', vmin=min_Z, vmax=max_Z, extent=eixo)
-    axes_z[1].set_title(f'Inversão Direta com Interpolação - Impedância (SNR {SNR_dB}dB)', fontweight='bold')
-    axes_z[1].set_ylabel('Profundidade (km)')
-    fig_z.colorbar(im8, ax=axes_z[1], label='Impedância (kg/(m²s))')
-
-    im9 = axes_z[2].imshow(rel_erro_Z, aspect='auto', cmap='turbo', vmin=0, vmax=100, extent=eixo)
-    axes_z[2].set_title('Erro (%)', fontweight='bold')
-    axes_z[2].set_xlabel('X (km)')
-    axes_z[2].set_ylabel('Profundidade (km)')
-    fig_z.colorbar(im9, ax=axes_z[2], label='Erro (%)')
-
-    fig_z.tight_layout()
-    fig_z.savefig(f'erro_peso_impedancia_{N_tiros}_SNR{SNR_dB}.png', dpi=300)
-    plt.close(fig_z)
-
-    print("Pronto!")
+    print("Varredura de alphas totalmente concluída!")
