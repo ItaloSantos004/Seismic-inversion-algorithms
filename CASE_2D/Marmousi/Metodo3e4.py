@@ -179,7 +179,7 @@ if __name__ == '__main__':
     # ========================================================
     # LOOP DE VARREDURA DOS ALPHAS
     # ========================================================
-    lista_alphas = [0.4]
+    lista_alphas = [0.6, 0.8, 1.0, 1.2, 1.5]
     
     for alpha in lista_alphas:
         print("\n" + "="*50)
