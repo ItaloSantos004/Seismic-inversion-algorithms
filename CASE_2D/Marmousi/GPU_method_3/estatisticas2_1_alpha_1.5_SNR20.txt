@@ -1,0 +1,5 @@
+Resultados da Inversão GPU - alpha = 1.5 | SNR: 20 dB | Tiros: 1
+--------------------------------------------------------------------------------
+VELOCIDADE -> Erro Médio: 15.59% | Mediana: 11.80% | Máximo: 107.71%
+DENSIDADE  -> Erro Médio: 21.95% | Mediana: 14.55% | Máximo: 222.80%
+IMPEDÂNCIA -> Erro Médio: 3.79%   | Mediana: 2.10% | Máximo: 186.68%

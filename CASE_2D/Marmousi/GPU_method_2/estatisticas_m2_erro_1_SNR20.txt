@@ -1,0 +1,5 @@
+Resultados da Inversão Sísmica GPU - 1 tiro(s) | SNR: 20 dB
+-----------------------------------------------------------------
+VELOCIDADE -> Erro Médio: 16.60% | Mediana: 12.26% | Máximo: 97.02%
+DENSIDADE  -> Erro Médio: 25.57% | Mediana: 15.81% | Máximo: 218.02%
+IMPEDÂNCIA -> Erro Médio: 4.08%   | Mediana: 2.13% | Máximo: 167.07%
