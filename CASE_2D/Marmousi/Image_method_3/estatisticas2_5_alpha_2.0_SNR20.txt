@@ -1,0 +1,5 @@
+Resultados da Inversão - alpha = 2.0 | SNR: 20 dB | Tiros: 5
+--------------------------------------------------------------------------------
+VELOCIDADE -> Erro Médio: 9.80% | Mediana: 7.89% | Máximo: 78.08%
+DENSIDADE  -> Erro Médio: 17.99% | Mediana: 11.74% | Máximo: 153.00%
+IMPEDÂNCIA -> Erro Médio: 2.87%   | Mediana: 1.30% | Máximo: 74.08%

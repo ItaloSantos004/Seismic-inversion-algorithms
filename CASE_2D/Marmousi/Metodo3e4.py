@@ -93,8 +93,8 @@ def inversao(args):
             xi_valid = xi[validos]
             xi_max = np.max(np.abs(xi))
             
-            pesos_gauss = 0.10 + 0.90 * (1.0 - np.exp(- (xi_valid / (alpha * xi_max))**2))
-            #pesos_gauss = np.exp(- (xi_valid / (alpha * xi_max))**2)
+            #pesos_gauss = 0.10 + 0.90 * (1.0 - np.exp(- (xi_valid / (alpha * xi_max))**2))
+            pesos_gauss = np.exp(- (xi_valid / (alpha * xi_max))**2)
 
             def residuos_reparam(p):
                 Z0, c_opt = p
@@ -157,7 +157,7 @@ if __name__ == '__main__':
     xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1, dtype=np.float32)
 
     SNR_dB = 20
-    N_tiros = 1 # Conforme a tabela que você mostrou
+    N_tiros = 5 # Conforme a tabela que você mostrou
     fator_ruido = 10.0 ** (-SNR_dB / 20.0)
     num_nucleos = cpu_count()
 
@@ -179,7 +179,7 @@ if __name__ == '__main__':
     # ========================================================
     # LOOP DE VARREDURA DOS ALPHAS
     # ========================================================
-    lista_alphas = [0.6, 0.8, 1.0, 1.2, 1.5]
+    lista_alphas = [1.5, 2.0]
     
     for alpha in lista_alphas:
         print("\n" + "="*50)
