@@ -4,7 +4,6 @@ from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter
 import scipy.io as sio
 import torch
-
 # Dispositivo PyTorch (GPU CUDA se disponível)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -143,7 +142,7 @@ if __name__ == '__main__':
     xi2_gpu = torch.from_numpy(xi_np**2).to(device)
 
     SNR_dB = 20
-    N_tiros = 1
+    N_tiros = 25
     fator_ruido = 10.0 ** (-SNR_dB / 20.0)
 
     print("Carregando dados originais para cálculo de erro")
