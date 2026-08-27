@@ -1,0 +1,335 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter
+import scipy.io as sio
+import torch
+
+# Dispositivo PyTorch (GPU CUDA se disponível)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+def inversao_layer_peeling_gpu(P_canal, W_canal, ni, nt2, Z_min, Z_max):
+    Nx, n_sens, _ = P_canal.shape
+    Zrec = torch.zeros((Nx, n_sens, ni), device=device, dtype=torch.float32)
+    
+    Pinv_prev = torch.zeros((Nx, n_sens, nt2), device=device, dtype=torch.float32)
+    Winv_prev = torch.zeros((Nx, n_sens, nt2), device=device, dtype=torch.float32)
+    
+    # Superfície
+    Pinv_prev[:, :, 0:nt2-2:2] = P_canal[:, :, 2:nt2:2]
+    Winv_prev[:, :, 0:nt2-2:2] = W_canal[:, :, 2:nt2:2]
+    
+    W0 = Winv_prev[:, :, 0]
+    P0 = Pinv_prev[:, :, 0]
+    
+    valid0 = (W0 != 0) & torch.isfinite(W0)
+    Z0 = torch.where(valid0, P0 / W0, torch.tensor(Z_min, device=device))
+    Z0 = torch.clamp(Z0, Z_min, Z_max)
+    Zrec[:, :, 0] = Z0
+    
+    Zinv_prev = Z0
+    
+    # Recursão Layer-Peeling vetorizada em GPU
+    for i in range(1, ni):
+        Pinv_curr = torch.zeros_like(Pinv_prev)
+        Winv_curr = torch.zeros_like(Winv_prev)
+        
+        Zi = torch.where((Zinv_prev == 0) | (~torch.isfinite(Zinv_prev)), torch.tensor(Z_min, device=device), Zinv_prev)
+        Zi_exp = Zi.unsqueeze(-1)
+        
+        js = torch.arange(i, nt2 - i, 2, device=device)
+        if len(js) > 0:
+            jm1, jp1 = js - 1, js + 1
+            
+            a = Winv_prev[:, :, jm1] + Winv_prev[:, :, jp1]
+            b = Winv_prev[:, :, jm1] - Winv_prev[:, :, jp1]
+            c_calc = Pinv_prev[:, :, jm1] + Pinv_prev[:, :, jp1]
+            d = Pinv_prev[:, :, jm1] - Pinv_prev[:, :, jp1]
+            
+            Winv_curr[:, :, js] = 0.5 * (a + d / Zi_exp)
+            Pinv_curr[:, :, js] = 0.5 * (Zi_exp * b + c_calc)
+        
+        W_ii = Winv_curr[:, :, i]
+        P_ii = Pinv_curr[:, :, i]
+        
+        valid_i = (W_ii != 0) & torch.isfinite(W_ii)
+        Znovo = P_ii / W_ii
+        
+        Z_atual = torch.where(valid_i & torch.isfinite(Znovo), torch.clamp(Znovo, Z_min, Z_max), Zi)
+        Zrec[:, :, i] = Z_atual
+        
+        Zinv_prev = Z_atual
+        Pinv_prev = Pinv_curr
+        Winv_prev = Winv_curr
+        
+    return Zrec
+
+
+def otimizar_parametros_gpu_hibrido(Zrec, xi_gpu, xi2_gpu, w0, lim, alpha, f_scale_val, n_iters=500):
+    Z_medido = Zrec.permute(0, 2, 1) # (Nx, ni, n_sens)
+    Nx, ni, n_sens = Z_medido.shape
+    
+    rho_min, rho_max = lim[0]
+    c_min, c_max = lim[1]
+    Z0_min, Z0_max = rho_min * c_min, rho_max * c_max
+    
+    validos = torch.abs(Z_medido) > 1e-5
+    
+    escala_Z = torch.median(torch.abs(Z_medido), dim=-1, keepdim=True).values
+    escala_Z = torch.where(~torch.isfinite(escala_Z) | (escala_Z < 1e-12), torch.tensor(1.0, device=device), escala_Z)
+    
+    # Pesos gaussianos por ângulo/xi (incorporando alpha)
+    xi_max = torch.max(torch.abs(xi_gpu))
+    pesos_gauss = torch.exp(- (xi_gpu / (alpha * xi_max))**2).unsqueeze(0).unsqueeze(0) # (1, 1, n_sens)
+    
+    # Inicialização inteligente do Z0 pela incidência normal (canal central xi = 0)
+    Z0_inc_normal = Zrec[:, n_sens // 2, :].clamp(Z0_min + 1e-3, Z0_max - 1e-3)
+    p_init = (Z0_inc_normal - Z0_min) / (Z0_max - Z0_min)
+    u_Z_init = torch.log(p_init / (1.0 - p_init))
+    
+    u_Z = u_Z_init.clone().detach().requires_grad_(True)
+    u_c = torch.zeros((Nx, ni), device=device, requires_grad=True)
+    
+    optimizer = torch.optim.Adam([u_Z, u_c], lr=0.03)
+    xi2_3d = xi2_gpu.unsqueeze(0).unsqueeze(0)
+    
+    # Otimização em lote simultânea
+    for _ in range(n_iters):
+        optimizer.zero_grad()
+        
+        Z0 = Z0_min + (Z0_max - Z0_min) * torch.sigmoid(u_Z)
+        c = c_min + (c_max - c_min) * torch.sigmoid(u_c)
+        rho_virtual = Z0 / c
+        
+        c_3d = c.unsqueeze(-1)
+        rho_3d = rho_virtual.unsqueeze(-1)
+        
+        kz2 = torch.clamp((w0 / c_3d)**2 - xi2_3d, min=1e-10)
+        kz = torch.sqrt(kz2)
+        Z_teo = (rho_3d * w0) / kz
+        
+        res = (Z_medido - Z_teo) / escala_Z
+        
+        # Perda robusta Pseudo-Huber (f_scale) multiplicada pelos pesos (alpha)
+        loss_elem = 2 * (f_scale_val**2) * (torch.sqrt(1 + (res / f_scale_val)**2) - 1)
+        loss_elem_weighted = loss_elem * pesos_gauss
+        
+        loss = torch.where(validos, loss_elem_weighted, torch.zeros_like(loss_elem_weighted)).sum()
+        
+        loss.backward()
+        optimizer.step()
+        
+    with torch.no_grad():
+        Z0_final = Z0_min + (Z0_max - Z0_min) * torch.sigmoid(u_Z)
+        c_final = torch.clamp(c_min + (c_max - c_min) * torch.sigmoid(u_c), c_min, c_max)
+        rho_final = torch.clamp(Z0_final / c_final, rho_min, rho_max)
+        Z0_final = torch.clamp(Z0_final, Z0_min, Z0_max)
+        
+    return c_final.T.cpu().numpy(), rho_final.T.cpu().numpy(), Z0_final.T.cpu().numpy()
+
+
+if __name__ == '__main__':
+    print("Carregando dados PW")
+    dados = np.load('dados_marmousi_P_W_completos.npz')
+    
+    # Conversão dos dados de entrada para Tensors GPU
+    P_real = torch.from_numpy(dados['P_real']).to(device).float()
+    W_real = torch.from_numpy(dados['W_real']).to(device).float()
+    
+    Nx_idx, n_sens, nt = P_real.shape
+    ni = 2800                  
+    nt2 = nt 
+    dx = 50.0
+    w0 = 2 * np.pi * 50
+    
+    xi_np = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1, dtype=np.float32)
+    xi_gpu = torch.from_numpy(xi_np).to(device)
+    xi2_gpu = torch.from_numpy(xi_np**2).to(device)
+
+    SNR_dB = 20
+    N_tiros = 5
+    fator_ruido = 10.0 ** (-SNR_dB / 20.0)
+
+    print("Carregando dados originais para cálculo de erro")
+    dados_marmousi = sio.loadmat('marmousi_matrizes.mat')
+    vm = np.array(dados_marmousi['Vp'], dtype=np.float32)[:ni, :]
+    rhom = np.array(dados_marmousi['Rho'], dtype=np.float32)[:ni, :]
+
+    sig = 3.0
+    vm_suav = gaussian_filter(vm, sigma=sig).astype(np.float32)
+    rhom_suav = gaussian_filter(rhom, sigma=sig).astype(np.float32)
+    Zm_suav = rhom_suav * vm_suav
+
+    dxm = 1.25
+    nxm = vm.shape[1]
+    xm = np.arange(nxm) * dxm
+    xinv = np.arange(Nx_idx) * dx 
+
+    lim = [(900, 6000), (1400, 4000)]
+    Z_min, Z_max = lim[0][0] * lim[1][0], lim[0][1] * lim[1][1]
+
+    # ========================================================
+    # LISTAS DE TESTE (Alphas e f_scales)
+    # ========================================================
+    lista_alphas = [0.8, 1.0, 1.2, 1.5, 2.0]
+    lista_f_scales = [0.05, 0.1, 0.25, 0.5]
+    
+    for alpha in lista_alphas:
+        for f_scale_val in lista_f_scales:
+            print("\n" + "="*60)
+            print(f"Iniciando inversão na GPU com alpha = {alpha} | f_scale = {f_scale_val}")
+            print("="*60)
+            
+            # Reset de sementes para garantir igualdade de ruído nas comparações
+            torch.manual_seed(42)
+            np.random.seed(42)
+            
+            Vel_rec_acum = np.zeros((ni, Nx_idx), dtype=np.float32)
+            Rho_rec_acum = np.zeros((ni, Nx_idx), dtype=np.float32)
+            Z0_rec_acum = np.zeros((ni, Nx_idx), dtype=np.float32)
+
+            # --- LOOP DOS TIROS ---
+            for tiro in range(1, N_tiros + 1):
+                print(f"  -> Processando tiro {tiro}/{N_tiros} na GPU...")
+                
+                rms_P = torch.sqrt(torch.mean(P_real**2, dim=(1,2), keepdim=True))
+                rms_W = torch.sqrt(torch.mean(W_real**2, dim=(1,2), keepdim=True))
+                
+                ruido_P = torch.randn_like(P_real)
+                ruido_W = torch.randn_like(W_real)
+                
+                P_noisy = P_real + (fator_ruido * rms_P) * ruido_P
+                W_noisy = W_real + (fator_ruido * rms_W) * ruido_W
+
+                P_canal = torch.real(torch.fft.fftshift(torch.fft.fft(P_noisy, dim=1), dim=1))
+                W_canal = torch.real(torch.fft.fftshift(torch.fft.fft(W_noisy, dim=1), dim=1))
+
+                Zrec = inversao_layer_peeling_gpu(P_canal, W_canal, ni, nt2, Z_min, Z_max)
+                
+                # Chamando o otimizador Híbrido (Método 3 + 5)
+                vel_tiro, rho_tiro, Z0_tiro = otimizar_parametros_gpu_hibrido(Zrec, xi_gpu, xi2_gpu, w0, lim, alpha, f_scale_val, n_iters=500)
+                
+                Vel_rec_acum += vel_tiro
+                Rho_rec_acum += rho_tiro
+                Z0_rec_acum += Z0_tiro
+
+            print("Calculando médias e interpolando...")
+            Vel_rec = Vel_rec_acum / N_tiros
+            Rho_rec = Rho_rec_acum / N_tiros
+            Z0_rec_media = Z0_rec_acum / N_tiros
+
+            vint = np.zeros((ni, nxm), dtype=np.float32) 
+            rhoint = np.zeros((ni, nxm), dtype=np.float32)
+            Zint = np.zeros((ni, nxm), dtype=np.float32) 
+
+            for i in range(ni):
+                int_v = interp1d(xinv, Vel_rec[i, :], kind='cubic', fill_value='extrapolate')
+                vint[i, :] = int_v(xm)
+                
+                int_rho = interp1d(xinv, Rho_rec[i, :], kind='cubic', fill_value='extrapolate')
+                rhoint[i, :] = int_rho(xm)
+                
+                int_Z = interp1d(xinv, Z0_rec_media[i, :], kind='cubic', fill_value='extrapolate')
+                Zint[i, :] = int_Z(xm)
+
+            # Cálculo de erros relativos (%)
+            abs_erro_v = np.abs(vint - vm_suav)
+            rel_erro_v = (abs_erro_v / np.maximum(vm_suav, 1e-10)) * 100
+
+            abs_erro_rho = np.abs(rhoint - rhom_suav)
+            rel_erro_rho = (abs_erro_rho / np.maximum(rhom_suav, 1e-10)) * 100
+
+            abs_erro_Z = np.abs(Zint - Zm_suav)
+            rel_erro_Z = (abs_erro_Z / np.maximum(Zm_suav, 1e-10)) * 100
+
+            mean_erro_v, median_erro_v, max_erro_v = np.mean(rel_erro_v), np.median(rel_erro_v), np.max(rel_erro_v)
+            mean_erro_rho, median_erro_rho, max_erro_rho = np.mean(rel_erro_rho), np.median(rel_erro_rho), np.max(rel_erro_rho)
+            mean_erro_Z, median_erro_Z, max_erro_Z = np.mean(rel_erro_Z), np.median(rel_erro_Z), np.max(rel_erro_Z)
+            
+            nome_arquivo_txt = f'estatisticas_hibrido_{N_tiros}tiros_a{alpha}_L1_{f_scale_val}_SNR{SNR_dB}.txt'
+            with open(nome_arquivo_txt, 'w', encoding='utf-8') as f:
+                f.write(f"Resultados da Inversão Híbrida GPU - alpha={alpha} | f_scale={f_scale_val} | SNR={SNR_dB}dB | Tiros={N_tiros}\n")
+                f.write("-" * 80 + "\n")
+                f.write(f"VELOCIDADE -> Erro Médio: {mean_erro_v:.2f}% | Mediana: {median_erro_v:.2f}% | Máximo: {max_erro_v:.2f}%\n")
+                f.write(f"DENSIDADE  -> Erro Médio: {mean_erro_rho:.2f}% | Mediana: {median_erro_rho:.2f}% | Máximo: {max_erro_rho:.2f}%\n")
+                f.write(f"IMPEDÂNCIA -> Erro Médio: {mean_erro_Z:.2f}%   | Mediana: {median_erro_Z:.2f}% | Máximo: {max_erro_Z:.2f}%\n")
+            
+            xkm1, xkm2, zkm = xm[0] / 1000, xm[-1] / 1000, (ni * dxm) / 1000
+            eixo = [xkm1, xkm2, zkm, 0] 
+
+            # ==================== SALVAR GRÁFICOS ====================
+            print("Gerando gráficos...")
+            
+            # --- Velocidade ---
+            fig_v, axes_v = plt.subplots(3, 1, figsize=(14, 12))
+            min_vel, max_vel = np.min(vm_suav), np.max(vm_suav)
+
+            im1 = axes_v[0].imshow(vm_suav, aspect='auto', cmap='jet', vmin=min_vel, vmax=max_vel, extent=eixo)
+            axes_v[0].set_title('Marmousi Suavizado - Velocidade', fontweight='bold')
+            axes_v[0].set_ylabel('Profundidade (km)')
+            fig_v.colorbar(im1, ax=axes_v[0], label='Velocidade (m/s)')
+
+            im2 = axes_v[1].imshow(vint, aspect='auto', cmap='jet', vmin=min_vel, vmax=max_vel, extent=eixo)
+            axes_v[1].set_title(f'Inversão Híbrida GPU - Velocidade (a={alpha} | L1={f_scale_val} | SNR={SNR_dB}dB)', fontweight='bold')
+            axes_v[1].set_ylabel('Profundidade (km)')
+            fig_v.colorbar(im2, ax=axes_v[1], label='Velocidade (m/s)')
+
+            im3 = axes_v[2].imshow(rel_erro_v, aspect='auto', cmap='turbo', vmin=0, vmax=100, extent=eixo)
+            axes_v[2].set_title('Erro (%)', fontweight='bold')
+            axes_v[2].set_xlabel('X (km)')
+            axes_v[2].set_ylabel('Profundidade (km)')
+            fig_v.colorbar(im3, ax=axes_v[2], label='Erro (%)')
+
+            fig_v.tight_layout()
+            fig_v.savefig(f'erro_velocidade_{N_tiros}tiros_a{alpha}_L1_{f_scale_val}_SNR{SNR_dB}.png', dpi=300)
+            plt.close(fig_v)
+
+            # --- Densidade ---
+            fig_r, axes_r = plt.subplots(3, 1, figsize=(14, 12))
+            min_rho, max_rho = np.min(rhom_suav), np.max(rhom_suav)
+
+            im4 = axes_r[0].imshow(rhom_suav, aspect='auto', cmap='viridis', vmin=min_rho, vmax=max_rho, extent=eixo)
+            axes_r[0].set_title('Marmousi Suavizado - Densidade', fontweight='bold')
+            axes_r[0].set_ylabel('Profundidade (km)')
+            fig_r.colorbar(im4, ax=axes_r[0], label='Densidade (kg/m³)')
+
+            im5 = axes_r[1].imshow(rhoint, aspect='auto', cmap='viridis', vmin=min_rho, vmax=max_rho, extent=eixo)
+            axes_r[1].set_title(f'Inversão Híbrida GPU - Densidade (a={alpha} | L1={f_scale_val} | SNR={SNR_dB}dB)', fontweight='bold')
+            axes_r[1].set_ylabel('Profundidade (km)')
+            fig_r.colorbar(im5, ax=axes_r[1], label='Densidade (kg/m³)')
+
+            im6 = axes_r[2].imshow(rel_erro_rho, aspect='auto', cmap='turbo', vmin=0, vmax=100, extent=eixo)
+            axes_r[2].set_title('Erro (%)', fontweight='bold')
+            axes_r[2].set_xlabel('X (km)')
+            axes_r[2].set_ylabel('Profundidade (km)')
+            fig_r.colorbar(im6, ax=axes_r[2], label='Erro (%)')
+
+            fig_r.tight_layout()
+            fig_r.savefig(f'erro_densidade_{N_tiros}tiros_a{alpha}_L1_{f_scale_val}_SNR{SNR_dB}.png', dpi=300)
+            plt.close(fig_r)
+
+            # --- Impedância ---
+            fig_z, axes_z = plt.subplots(3, 1, figsize=(14, 12))
+            min_Z, max_Z = np.min(Zm_suav), np.max(Zm_suav)
+
+            im7 = axes_z[0].imshow(Zm_suav, aspect='auto', cmap='magma', vmin=min_Z, vmax=max_Z, extent=eixo)
+            axes_z[0].set_title('Marmousi Suavizado - Impedância', fontweight='bold')
+            axes_z[0].set_ylabel('Profundidade (km)')
+            fig_z.colorbar(im7, ax=axes_z[0], label='Impedância (kg/(m²s))')
+
+            im8 = axes_z[1].imshow(Zint, aspect='auto', cmap='magma', vmin=min_Z, vmax=max_Z, extent=eixo)
+            axes_z[1].set_title(f'Inversão Híbrida GPU - Impedância (a={alpha} | L1={f_scale_val} | SNR={SNR_dB}dB)', fontweight='bold')
+            axes_z[1].set_ylabel('Profundidade (km)')
+            fig_z.colorbar(im8, ax=axes_z[1], label='Impedância (kg/(m²s))')
+
+            im9 = axes_z[2].imshow(rel_erro_Z, aspect='auto', cmap='turbo', vmin=0, vmax=100, extent=eixo)
+            axes_z[2].set_title('Erro (%)', fontweight='bold')
+            axes_z[2].set_xlabel('X (km)')
+            axes_z[2].set_ylabel('Profundidade (km)')
+            fig_z.colorbar(im9, ax=axes_z[2], label='Erro (%)')
+
+            fig_z.tight_layout()
+            fig_z.savefig(f'erro_impedancia_{N_tiros}tiros_a{alpha}_L1_{f_scale_val}_SNR{SNR_dB}.png', dpi=300)
+            plt.close(fig_z)
+
+    print("\nPronto")

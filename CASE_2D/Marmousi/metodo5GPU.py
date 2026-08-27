@@ -126,7 +126,7 @@ def otimizar_parametros_gpu(Zrec, xi2, w0, lim, f_scale_val, n_iters=500):
 
 if __name__ == '__main__':
     # Configurações do f_scale e Simulação
-    f_scale_val = 0.05
+    f_scale_val = 0.25
 
     print("Carregando dados PW")
     dados = np.load('dados_marmousi_P_W_completos.npz')
@@ -146,7 +146,7 @@ if __name__ == '__main__':
 
     # Injetando ruído
     SNR_dB = 20
-    N_tiros = 5
+    N_tiros = 25
     fator_ruido = 10.0 ** (-SNR_dB / 20.0)
 
     Vel_acumulada = np.zeros((ni, Nx_idx), dtype=np.float32)
