@@ -147,7 +147,7 @@ if __name__ == '__main__':
     xi2_gpu = torch.from_numpy(xi_np**2).to(device)
 
     SNR_dB = 20
-    N_tiros = 5
+    N_tiros = 25
     fator_ruido = 10.0 ** (-SNR_dB / 20.0)
 
     print("Carregando dados originais para cálculo de erro")

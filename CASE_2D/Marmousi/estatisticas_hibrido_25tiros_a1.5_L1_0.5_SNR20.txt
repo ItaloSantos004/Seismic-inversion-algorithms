@@ -1,0 +1,5 @@
+Resultados da Inversão Híbrida GPU - alpha=1.5 | f_scale=0.5 | SNR=20dB | Tiros=25
+--------------------------------------------------------------------------------
+VELOCIDADE -> Erro Médio: 8.17% | Mediana: 7.36% | Máximo: 73.09%
+DENSIDADE  -> Erro Médio: 14.53% | Mediana: 8.94% | Máximo: 106.53%
+IMPEDÂNCIA -> Erro Médio: 2.34%   | Mediana: 0.81% | Máximo: 76.32%
