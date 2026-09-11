@@ -16,9 +16,9 @@ Vel_suav = gaussian_filter(Vel, sigma=sig).astype(np.float32)
 Rho_suav = gaussian_filter(Rho, sigma=sig).astype(np.float32)
 
 #parametros
-dx = 50.0              
+dx = 25.0              
 w0 = 2 * np.pi * 50  
-n_sens = 31 #numero de sensores na janela          
+n_sens = 61 #numero de sensores na janela          
 ni = 2800      
 nt = 5600                
 
@@ -106,6 +106,6 @@ for col in range(Nx_idx):
         W_real[col, :, j] = np.real(np.fft.ifft(np.fft.ifftshift(W_ang[col, :, j])))
 
 #salvando tudo
-np.savez('dados_marmousi_P_W_completos.npz', P_real=P_real, W_real=W_real, Vp_real=Vel_idx, Rho_real=Rho_idx)
+np.savez('dados_marmousi_P_W_dx25_sens61.npz', P_real=P_real, W_real=W_real, Vp_real=Vel_idx, Rho_real=Rho_idx)
 
 print("Dados salvos")
