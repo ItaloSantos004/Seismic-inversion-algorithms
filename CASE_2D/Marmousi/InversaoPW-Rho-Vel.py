@@ -13,14 +13,14 @@ def inversao(args):
     xi2 = xi**2
     lim = [(900, 6000), (1400, 4000)]
     
-    vel_id = np.zeros(ni, dtype=np.float32)
-    rho_id = np.zeros(ni, dtype=np.float32)
-    Zrec = np.zeros((n_sens, ni), dtype=np.float32)
+    vel_id = np.zeros(ni)
+    rho_id = np.zeros(ni)
+    Zrec = np.zeros((n_sens, ni))
     
     for m in range(n_sens):
-        Pinv = np.zeros((ni, nt2), dtype=np.float32)
-        Winv = np.zeros((ni, nt2), dtype=np.float32)
-        Zinv = np.zeros(ni, dtype=np.float32)
+        Pinv = np.zeros((ni, nt2))
+        Winv = np.zeros((ni, nt2))
+        Zinv = np.zeros(ni)
         
         #superficie
         for j in range(0, nt2, 2):
@@ -107,7 +107,7 @@ def inversao(args):
 
 if __name__ == '__main__':
     #extraindo os dados para inversão
-    dados = np.load('dados_marmousi_P_W_completos.npz')
+    dados = np.load('dados_marmousi_P_W_padrao.npz')
     P_real = dados['P_real']
     W_real = dados['W_real']
     Vel_idx = dados['Vp_real']
@@ -119,13 +119,13 @@ if __name__ == '__main__':
     nt2 = nt 
     dx = 50.0
     w0 = 2 * np.pi * 50
-    xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1, dtype=np.float32)
+    xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1)
 
     print("Inicio - fazendo transformada de fourier")
 
     #fazendo trasnformada para voltar pro dominio dos angulos
-    P_canal = np.zeros_like(P_real, dtype=np.float32)
-    W_canal = np.zeros_like(W_real, dtype=np.float32)
+    P_canal = np.zeros_like(P_real)
+    W_canal = np.zeros_like(W_real)
 
     for id in range(Nx_idx):
         for j in range(nt):
@@ -142,8 +142,8 @@ if __name__ == '__main__':
     num_nucleos = cpu_count()
     print(f"Usando {num_nucleos} núcleos")
     
-    Vel_rec = np.zeros((ni, Nx_idx), dtype=np.float32)
-    Rho_rec = np.zeros((ni, Nx_idx), dtype=np.float32)
+    Vel_rec = np.zeros((ni, Nx_idx))
+    Rho_rec = np.zeros((ni, Nx_idx))
     
     with Pool(processes=num_nucleos) as pool: #roda em paralelo
         resultados = pool.map(inversao, arg)
@@ -156,7 +156,7 @@ if __name__ == '__main__':
     print("Inversão Concluída")
 
     #Salvando as matrizes de inversão para comparação futura
-    np.savez('matrizes_inversao_completa.npz', Vel_rec=Vel_rec, Rho_rec=Rho_rec)
+    np.savez('matrizes_inversao_padrao.npz', Vel_rec=Vel_rec, Rho_rec=Rho_rec)
     print("Matrizes Salvas")
 
     #visualização velocidade

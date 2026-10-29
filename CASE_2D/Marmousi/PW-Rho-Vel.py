@@ -6,19 +6,19 @@ from scipy.ndimage import gaussian_filter
 #carregando os dados originais
 print("Carregando dados do Marmousi")
 dados = sio.loadmat('marmousi_matrizes.mat')
-Vel = np.ascontiguousarray(dados['Vp']).astype(np.float32)
-Rho = np.ascontiguousarray(dados['Rho']).astype(np.float32)
+Vel = np.ascontiguousarray(dados['Vp'])
+Rho = np.ascontiguousarray(dados['Rho'])
 
 #suavizando modelo
 print("Suavizando Modelo")
 sig = 3.0
-Vel_suav = gaussian_filter(Vel, sigma=sig).astype(np.float32)
-Rho_suav = gaussian_filter(Rho, sigma=sig).astype(np.float32)
+Vel_suav = gaussian_filter(Vel, sigma=sig)
+Rho_suav = gaussian_filter(Rho, sigma=sig)
 
 #parametros
-dx = 25.0              
+dx = 50.0              
 w0 = 2 * np.pi * 50  
-n_sens = 61 #numero de sensores na janela          
+n_sens = 31 #numero de sensores na janela          
 ni = 2800      
 nt = 5600                
 
@@ -31,16 +31,16 @@ Nz_idx, Nx_idx = Vel_idx.shape
 print(f"Amostragem dos dados para {Nx_idx} colunas e {Nz_idx} camadas.")
 
 #Matrizes no domínio dos ângulos
-P_ang = np.zeros((Nx_idx, n_sens, nt), dtype=np.complex64)
-W_ang = np.zeros((Nx_idx, n_sens, nt), dtype=np.complex64)
+P_ang = np.zeros((Nx_idx, n_sens, nt))
+W_ang = np.zeros((Nx_idx, n_sens, nt))
 
 #Matrizes finais
-P_real = np.zeros((Nx_idx, n_sens, nt), dtype=np.float32)
-W_real = np.zeros((Nx_idx, n_sens, nt), dtype=np.float32)
+P_real = np.zeros((Nx_idx, n_sens, nt))
+W_real = np.zeros((Nx_idx, n_sens, nt))
 
 #Vetor do numero de onda
-xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1, dtype=np.float32)
-fonte = np.zeros(nt, dtype=np.float32)
+xi = (2 * np.pi / (n_sens * dx)) * np.arange(-(n_sens//2), (n_sens//2) + 1)
+fonte = np.zeros(nt)
 fonte[2] = 1.0 #fonte
 
 print("Modelagem Direta")
@@ -55,11 +55,11 @@ def geradorPW(Vel_idx, Rho_idx, Paux, Waux, xi, fonte, w0, ni, nt, Nx_idx, n_sen
         creal = Vel_idx[:, col]
         preal = Rho_idx[:, col] 
         
-        Pteo = np.zeros((n_sens, nt), dtype=np.complex64)
-        Wteo = np.zeros((n_sens, nt), dtype=np.complex64)
+        Pteo = np.zeros((n_sens, nt))
+        Wteo = np.zeros((n_sens, nt))
         
         for m in range(n_sens):
-            Zm = np.zeros(ni, dtype=np.complex64)
+            Zm = np.zeros(ni)
             for i in range(ni):
                 termo = (w0 / creal[i])**2 - xi[m]**2
                 if termo > 0:
@@ -68,8 +68,8 @@ def geradorPW(Vel_idx, Rho_idx, Paux, Waux, xi, fonte, w0, ni, nt, Nx_idx, n_sen
                 else:
                     Zm[i] = Zm[i-1] if i > 0 else (preal[i] * creal[i])
             
-            P = np.zeros((ni, nt), dtype=np.complex64)
-            W = np.zeros((ni, nt), dtype=np.complex64)
+            P = np.zeros((ni, nt))
+            W = np.zeros((ni, nt))
             
             for j in range(1, nt):
                 if (0 + j) % 2 == 0:
@@ -106,6 +106,6 @@ for col in range(Nx_idx):
         W_real[col, :, j] = np.real(np.fft.ifft(np.fft.ifftshift(W_ang[col, :, j])))
 
 #salvando tudo
-np.savez('dados_marmousi_P_W_dx25_sens61.npz', P_real=P_real, W_real=W_real, Vp_real=Vel_idx, Rho_real=Rho_idx)
+np.savez('dados_marmousi_P_W_padrao.npz', P_real=P_real, W_real=W_real, Vp_real=Vel_idx, Rho_real=Rho_idx)
 
 print("Dados salvos")

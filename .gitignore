@@ -1,1 +1,7 @@
 CASE_2D/Marmousi/dados_marmousi_P_W_completos.npz
+
+# Ambientes virtuais Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]

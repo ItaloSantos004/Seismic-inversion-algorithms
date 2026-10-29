@@ -5,7 +5,7 @@ from scipy.ndimage import gaussian_filter
 import scipy.io as sio
 
 print("Carregando matrizes de inversão (Velocidade e Densidade)...")
-dados_inv = np.load('matrizes_inversao_completa.npz')
+dados_inv = np.load('matrizes_inversao_padrao.npz')
 vinv = dados_inv['Vel_rec']
 rhoinv = dados_inv['Rho_rec']
 
@@ -15,14 +15,14 @@ dx = 50.0
 
 print("Carregando dados originais")
 dados = sio.loadmat('marmousi_matrizes.mat')
-vm = np.array(dados['Vp'], dtype=np.float32)[:ni, :]
-rhom = np.array(dados['Rho'], dtype=np.float32)[:ni, :]
+vm = np.array(dados['Vp'])[:ni, :]
+rhom = np.array(dados['Rho'])[:ni, :]
 
 #suavizando o modelo
 print("Suavizando dados originais")
 sig = 3.0
-vm_suav = gaussian_filter(vm, sigma=sig).astype(np.float32)
-rhom_suav = gaussian_filter(rhom, sigma=sig).astype(np.float32)
+vm_suav = gaussian_filter(vm, sigma=sig)
+rhom_suav = gaussian_filter(rhom, sigma=sig)
 
 dxm = 1.25
 nxm = vm.shape[1]
@@ -33,8 +33,8 @@ xinv  = np.arange(Nx_idx) * dx #posiçoes
 xm = np.arange(nxm) * dxm
 
 #matrizes interpoladas
-vint = np.zeros((ni, nxm), dtype=np.float32) 
-rhoint = np.zeros((ni, nxm), dtype=np.float32)
+vint = np.zeros((ni, nxm)) 
+rhoint = np.zeros((ni, nxm))
 
 #interpola cada linha
 for i in range(ni):
